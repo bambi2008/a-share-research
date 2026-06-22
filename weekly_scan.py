@@ -49,14 +49,21 @@ SECTORS = {
 }
 
 
-def fetch_json(url):
-    """安全请求"""
-    cmd = f'curl -sL "{url}" -H "User-Agent: Mozilla/5.0" -H "Referer: https://data.eastmoney.com/"'
-    r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
-    try:
-        return json.loads(r.stdout)
-    except:
-        return None
+def fetch_json(url, max_retries=3, delay=1):
+    """安全请求（带重试，原始 curl 方式——不加 --insecure 才能通）"""
+    import time
+    for attempt in range(max_retries):
+        cmd = f'curl -sL "{url}" -H "User-Agent: Mozilla/5.0" -H "Referer: https://data.eastmoney.com/"'
+        r = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and r.stdout.strip():
+            try:
+                return json.loads(r.stdout)
+            except json.JSONDecodeError:
+                if attempt < max_retries - 1:
+                    time.sleep(delay)
+        elif attempt < max_retries - 1:
+            time.sleep(delay)
+    return None
 
 
 def safe_float(val):
@@ -256,12 +263,14 @@ def main():
     # 2. 拉取各板块并合并去重
     print("  2/4 板块成分股...")
     all_stocks = {}
-    for sector_name, bk_code in SECTORS.items():
+    for i, (sector_name, bk_code) in enumerate(SECTORS.items(), 1):
         stocks = fetch_sector_stocks(bk_code)
         for s in stocks:
             code = s.get('f12', '')
             if code not in all_stocks:
                 all_stocks[code] = s
+        status = f"{len(stocks)}只" if stocks else "❌失败"
+        print(f"      [{i}/{len(SECTORS)}] {sector_name}: {status}")
     print(f"      覆盖 {len(SECTORS)} 个板块, {len(all_stocks)} 只个股（去重后）")
 
     # 3. 质量筛选
@@ -280,8 +289,10 @@ def main():
     # 保存到文件
     week_num = datetime.now().isocalendar()[1]
     import os
-    os.makedirs("/Users/mao18/Projects/a-share-research/reports", exist_ok=True)
-    report_path = f"/Users/mao18/Projects/a-share-research/reports/week_{week_num}.md"
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    reports_dir = os.path.join(script_dir, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+    report_path = os.path.join(reports_dir, f"week_{week_num}.md")
     with open(report_path, 'w') as f:
         f.write(report)
     print(f"\n📄 报告已保存: {report_path}")
