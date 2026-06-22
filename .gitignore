@@ -2,3 +2,6 @@ reports/
 __pycache__/
 *.pyc
 test_*.py
+build/
+dist/
+*.spec

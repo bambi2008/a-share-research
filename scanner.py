@@ -1,0 +1,321 @@
+#!/usr/bin/env python3
+"""
+A股科技+新能源 扫描核心模块 (scanner)
+数据源: 巨潮资讯 + 新浪财经
+
+改进点:
+- PE 用 TTM(滚动四季) 替代单季×4，消除周期股失真
+- 行业集中度提示
+- ROE 局限性说明
+- 支持超时 + 取消
+"""
+from datetime import datetime, timedelta
+import concurrent.futures
+import os
+
+# ── 配置 ──
+FILTER_PE_MIN, FILTER_PE_MAX = 3, 40
+FILTER_ROE_MIN = 5
+TOP_N = 30
+FETCH_TIMEOUT = 90  # 单个数据请求超时(秒)
+
+TARGET_INDUSTRIES = [
+    "半导体", "电子化学品Ⅱ", "软件开发", "IT服务Ⅱ",
+    "通信服务", "通信设备", "计算机设备",
+    "消费电子", "光学光电子", "其他电子Ⅱ", "军工电子Ⅱ",
+    "电池", "光伏设备", "电网设备",
+    "风电设备", "电力", "自动化设备",
+    "互联网电商", "厨卫电器",
+]
+
+INDICES = [
+    ("上证指数", "sh000001"),
+    ("创业板指", "sz399006"),
+    ("科创50", "sh000688"),
+]
+
+
+class ScanCancelled(Exception):
+    """扫描被用户取消"""
+    pass
+
+
+def _fetch_with_timeout(fn, timeout, *args, **kwargs):
+    """在子线程执行 fn，超时则抛 TimeoutError（子线程作为 daemon 自然回收）"""
+    ex = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    fut = ex.submit(fn, *args, **kwargs)
+    try:
+        result = fut.result(timeout=timeout)
+        ex.shutdown(wait=False)
+        return result
+    except concurrent.futures.TimeoutError:
+        ex.shutdown(wait=False)
+        raise TimeoutError(f"数据请求超时(>{timeout}s)")
+
+
+def _report_quarter_dates(now=None):
+    """计算最近已披露的报告期 + 用于TTM的三个报告期
+    返回 (latest_q, prev_annual, prev_year_same_q)
+    例: 当前2026Q2 → latest=2026Q1(20260331), annual=2025(20251231), prev_q=2025Q1(20250331)
+    """
+    if now is None:
+        now = datetime.now()
+    y = now.year
+    m = now.month
+    # 季报披露滞后：粗略按月份判断最近已出的报告期
+    if m <= 4:        # Q4年报/次年Q1还没全出 → 用上一年Q3
+        latest = f"{y-1}0930"
+    elif m <= 8:      # Q1已出
+        latest = f"{y}0331"
+    elif m <= 10:     # 中报已出
+        latest = f"{y}0630"
+    else:             # Q3已出
+        latest = f"{y}0930"
+
+    ly = int(latest[:4])
+    md = latest[4:]
+    prev_annual = f"{ly-1}1231"
+    prev_year_same_q = f"{ly-1}{md}"
+    return latest, prev_annual, prev_year_same_q
+
+
+def run_scan(progress_callback=None, cancel_check=None):
+    """执行扫描。
+    progress_callback(msg): 进度回调
+    cancel_check(): 返回 True 表示用户请求取消
+    返回结果 dict。
+    """
+    import akshare as ak
+    import pandas as pd
+
+    def log(msg):
+        if progress_callback:
+            progress_callback(msg)
+
+    def check_cancel():
+        if cancel_check and cancel_check():
+            raise ScanCancelled("用户取消扫描")
+
+    # ── 1. 大盘指数 ──
+    log("1/5 大盘指数...")
+    index_data = {}
+    for name, sym in INDICES:
+        check_cancel()
+        try:
+            df = _fetch_with_timeout(ak.stock_zh_index_daily, FETCH_TIMEOUT, symbol=sym)
+            latest = df.iloc[-1]
+            prev = df.iloc[-6] if len(df) >= 6 else df.iloc[0]
+            close = latest['close']
+            chg = (close - prev['close']) / prev['close'] * 100
+            index_data[name] = {"close": close, "chg_pct": chg, "date": str(latest['date'])[:10]}
+        except Exception:
+            index_data[name] = {"close": None, "chg_pct": None, "date": None}
+
+    # ── 2. 季报(TTM需3期) ──
+    q_latest, q_annual, q_prev = _report_quarter_dates()
+    log(f"2/5 季报(TTM: {q_latest}/{q_annual}/{q_prev})...")
+
+    check_cancel()
+    df_latest = _fetch_with_timeout(ak.stock_yjbb_em, FETCH_TIMEOUT, date=q_latest)
+    log(f"  最新期 {q_latest}: {len(df_latest)} 只")
+
+    check_cancel()
+    try:
+        df_annual = _fetch_with_timeout(ak.stock_yjbb_em, FETCH_TIMEOUT, date=q_annual)
+        df_prev = _fetch_with_timeout(ak.stock_yjbb_em, FETCH_TIMEOUT, date=q_prev)
+        ttm_available = True
+        log(f"  TTM基期就绪: {len(df_annual)}/{len(df_prev)} 只")
+    except Exception as e:
+        df_annual = df_prev = None
+        ttm_available = False
+        log(f"  ⚠️ TTM基期获取失败，PE降级为单季×4")
+
+    # 构建 EPS 映射
+    def eps_map(df):
+        m = {}
+        if df is None:
+            return m
+        for _, r in df.iterrows():
+            code = str(r['股票代码'])
+            eps = r.get('每股收益')
+            if not pd.isna(eps):
+                m[code] = eps
+        return m
+
+    eps_latest = eps_map(df_latest)
+    eps_annual = eps_map(df_annual)
+    eps_prev = eps_map(df_prev)
+
+    def ttm_eps(code):
+        """TTM EPS = 最新累计 + 上年年报 - 上年同期累计"""
+        if ttm_available and code in eps_latest and code in eps_annual and code in eps_prev:
+            return eps_latest[code] + eps_annual[code] - eps_prev[code]
+        # 降级：单季累计年化（仅最新期可用时）
+        if code in eps_latest:
+            # latest 是累计值，按报告期月份年化
+            month = int(q_latest[4:6])
+            factor = 12 / month  # Q1=4, H1=2, Q3=4/3, 年报=1
+            return eps_latest[code] * factor
+        return None
+
+    # ── 3. 实时价格 ──
+    log("3/5 实时行情(新浪)...")
+    check_cancel()
+    df_price = _fetch_with_timeout(ak.stock_zh_a_spot, FETCH_TIMEOUT + 60)  # 新浪70页慢，多给时间
+    price_map = {}
+    for _, row in df_price.iterrows():
+        code = str(row['代码']).replace('bj', '').replace('sh', '').replace('sz', '')
+        price_map[code] = row['最新价']
+    log(f"  价格覆盖: {len(price_map)} 只")
+
+    # ── 4. 筛选 ──
+    log("4/5 筛选...")
+    check_cancel()
+    candidates = []
+    industry_stats = {}
+
+    for _, row in df_latest.iterrows():
+        industry = str(row.get('所处行业', ''))
+        if industry == 'nan' or industry not in TARGET_INDUSTRIES:
+            continue
+        industry_stats[industry] = industry_stats.get(industry, 0) + 1
+
+        roe = row.get('净资产收益率')
+        if pd.isna(roe) or roe < FILTER_ROE_MIN:
+            continue
+
+        code = str(row['股票代码'])
+        price = price_map.get(code)
+        teps = ttm_eps(code)
+        if teps is None or teps <= 0 or not price:
+            pe = None
+        else:
+            pe = price / teps
+
+        if pe is not None and (pe < FILTER_PE_MIN or pe > FILTER_PE_MAX):
+            continue
+
+        rev_g = row.get('营业总收入-同比增长')
+        profit_g = row.get('净利润-同比增长')
+
+        candidates.append({
+            'code': code, 'name': str(row['股票简称']),
+            'pe': pe, 'roe': roe, 'price': price,
+            'industry': industry,
+            'rev_growth': rev_g if not pd.isna(rev_g) else None,
+            'profit_growth': profit_g if not pd.isna(profit_g) else None,
+        })
+
+    candidates.sort(key=lambda x: x['roe'] or 0, reverse=True)
+
+    # 行业集中度（候选池层面）
+    cand_industry = {}
+    for c in candidates:
+        cand_industry[c['industry']] = cand_industry.get(c['industry'], 0) + 1
+    top_industry, top_count = (max(cand_industry.items(), key=lambda x: x[1])
+                                if cand_industry else (None, 0))
+    concentration = (top_count / len(candidates) * 100) if candidates else 0
+
+    log(f"  行业: {len(industry_stats)}个, 候选: {len(candidates)}只")
+
+    # ── 5. 生成报告 ──
+    log("5/5 生成报告...")
+    report = _build_report(index_data, industry_stats, candidates, cand_industry,
+                           top_industry, concentration, ttm_available, q_latest)
+
+    # 保存
+    now = datetime.now()
+    week_num = now.isocalendar()[1]
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    reports_dir = os.path.join(script_dir, "reports")
+    os.makedirs(reports_dir, exist_ok=True)
+    report_path = os.path.join(reports_dir, f"week_{week_num}.md")
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(report)
+
+    return {
+        "report": report,
+        "report_path": report_path,
+        "index_data": index_data,
+        "candidate_count": len(candidates),
+        "industry_count": len(industry_stats),
+        "total_stocks": sum(industry_stats.values()),
+        "concentration": concentration,
+        "top_industry": top_industry,
+        "ttm_available": ttm_available,
+        "scan_time": now.strftime('%Y-%m-%d %H:%M'),
+    }
+
+
+def _build_report(index_data, industry_stats, candidates, cand_industry,
+                  top_industry, concentration, ttm_available, q_latest):
+    now = datetime.now()
+    week_start = now - timedelta(days=now.weekday())
+    week_end = week_start + timedelta(days=4)
+    week_num = now.isocalendar()[1]
+    pe_method = "TTM(滚动四季)" if ttm_available else "单季年化(降级)"
+
+    r = []
+    r.append("=" * 64)
+    r.append(f"  A股科技+新能源 周度扫描报告 v4")
+    r.append(f"  {week_start.strftime('%Y.%m.%d')} - {week_end.strftime('%Y.%m.%d')}  |  第{week_num}周")
+    r.append(f"  生成: {now.strftime('%Y-%m-%d %H:%M')}  |  数据: 巨潮资讯 + 新浪财经")
+    r.append(f"  PE算法: {pe_method}  |  报告期: {q_latest}")
+    r.append("=" * 64)
+
+    r.append("\n## 一、大盘概况\n")
+    for name, info in index_data.items():
+        close = info['close']
+        chg = info['chg_pct']
+        date = info['date']
+        if close:
+            r.append(f"| {name} | {close:>10.2f} | {chg:>+8.2f}% | {date} |")
+        else:
+            r.append(f"| {name} | - | - | 数据获取失败 |")
+
+    r.append("\n## 二、行业扫描\n")
+    r.append("| 行业 | 股票数 |")
+    r.append("|------|--------|")
+    for ind in sorted(industry_stats.keys()):
+        r.append(f"| {ind} | {industry_stats[ind]} |")
+    r.append(f"| **合计** | **{sum(industry_stats.values())}** |")
+
+    r.append(f"\n## 三、候选标的池\n")
+    r.append(f"筛选: PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%  |  共 **{len(candidates)}** 只\n")
+
+    # 行业集中度警告
+    if top_industry and concentration >= 30:
+        r.append(f"> ⚠️ **行业集中度偏高**: {top_industry} 占候选池 {concentration:.0f}% "
+                 f"({cand_industry[top_industry]}/{len(candidates)})，注意分散风险。\n")
+
+    if candidates:
+        r.append("| 代码 | 名称 | PE | ROE% | 价格 | 行业 | 营收增% | 利润增% |")
+        r.append("|------|------|-----|------|------|------|---------|---------|")
+        for c in candidates[:TOP_N]:
+            pe_str = f"{c['pe']:.1f}" if c['pe'] else "-"
+            price_str = f"{c['price']:.2f}" if c['price'] else "-"
+            rev = f"{c['rev_growth']:.1f}" if c['rev_growth'] else "-"
+            prof = f"{c['profit_growth']:.1f}" if c['profit_growth'] else "-"
+            r.append(f"| {c['code']} | {c['name']} | {pe_str} | {c['roe']:.1f} | {price_str} | {c['industry']} | {rev} | {prof} |")
+
+    r.append(f"\n## 四、下周关注\n")
+    r.append("⏳ 待补充：政策事件、季报日历、解禁提醒")
+
+    r.append(f"\n## 五、方法论局限\n")
+    r.append("- **PE**: " + ("TTM滚动四季，已规避单季失真；但仍未剔除非经常性损益。" if ttm_available
+              else "TTM基期数据缺失，降级为单季年化，**周期股PE严重失真，仅供参考**。"))
+    r.append("- **ROE**: 未扣非，高ROE可能含一次性收益或高杠杆，需结合资产负债率与扣非净利润复核。")
+    r.append("- **周期股警示**: 营收/利润同比暴增(如>300%)往往是周期顶部信号，ROE虚高不可持续。")
+    r.append("- **无市值过滤**: 候选池未区分大/中/小盘，小市值流动性风险需自行评估。")
+    r.append("- **无回测**: 本策略未做历史有效性验证。")
+
+    r.append(f"\n---\n*风险提示: 本报告为初步筛选工具，不构成投资建议。*")
+
+    return "\n".join(r)
+
+
+if __name__ == "__main__":
+    # CLI 模式
+    result = run_scan(progress_callback=lambda m: print(f"  {m}"))
+    print("\n" + result["report"])
+    print(f"\n📄 已保存: {result['report_path']}")
