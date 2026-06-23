@@ -16,6 +16,9 @@ import os
 # ── 配置 ──
 FILTER_PE_MIN, FILTER_PE_MAX = 3, 40
 FILTER_ROE_MIN = 5
+FILTER_MV_MIN = 50       # 流通市值下限(亿)
+FILTER_MV_MAX = 10000    # 流通市值上限(亿)
+ENABLE_MKTCAP = True     # 是否补全市值并过滤(对候选逐只请求，较慢)
 TOP_N = 30
 FETCH_TIMEOUT = 90  # 单个数据请求超时(秒)
 
@@ -51,6 +54,36 @@ def _fetch_with_timeout(fn, timeout, *args, **kwargs):
     except concurrent.futures.TimeoutError:
         ex.shutdown(wait=False)
         raise TimeoutError(f"数据请求超时(>{timeout}s)")
+
+
+def _fetch_float_mktcap(ak, code):
+    """获取流通市值(亿元)。用新浪日线的 outstanding_share × 最新收盘价。
+    返回 None 表示获取失败（网络/无数据）。
+    """
+    # 新浪日线 symbol 需带市场前缀
+    if code.startswith(('60', '68', '90', '11', '51')):
+        sym = f"sh{code}"
+    elif code.startswith(('00', '30', '12', '15', '20')):
+        sym = f"sz{code}"
+    elif code.startswith(('8', '4', '92')):
+        sym = f"bj{code}"
+    else:
+        sym = f"sh{code}"
+    try:
+        df = _fetch_with_timeout(
+            ak.stock_zh_a_daily, 20, symbol=sym,
+            start_date="20260101", adjust=""
+        )
+        if df is None or len(df) == 0:
+            return None
+        latest = df.iloc[-1]
+        shares = latest.get('outstanding_share')
+        close = latest.get('close')
+        if shares and close:
+            return close * shares / 1e8  # 流通市值(亿)
+        return None
+    except Exception:
+        return None
 
 
 def _report_quarter_dates(now=None):
@@ -208,6 +241,29 @@ def run_scan(progress_callback=None, cancel_check=None):
 
     candidates.sort(key=lambda x: x['roe'] or 0, reverse=True)
 
+    # ── 4.5 市值补全与过滤（仅对候选逐只请求） ──
+    if ENABLE_MKTCAP and candidates:
+        log(f"  补全市值({len(candidates)}只)...")
+        filtered = []
+        for i, c in enumerate(candidates):
+            check_cancel()
+            mv = _fetch_float_mktcap(ak, c['code'])
+            c['mktcap'] = mv  # 流通市值(亿)，None表示获取失败
+            if mv is None:
+                # 获取失败：保留但标注，不因网络问题误杀
+                filtered.append(c)
+            elif FILTER_MV_MIN <= mv <= FILTER_MV_MAX:
+                filtered.append(c)
+            # 超出市值范围则剔除
+            if (i + 1) % 10 == 0:
+                log(f"    市值进度 {i+1}/{len(candidates)}")
+        removed = len(candidates) - len(filtered)
+        candidates = filtered
+        log(f"  市值过滤: 剔除 {removed} 只(范围 {FILTER_MV_MIN}-{FILTER_MV_MAX}亿), 剩 {len(candidates)} 只")
+    else:
+        for c in candidates:
+            c['mktcap'] = None
+
     # 行业集中度（候选池层面）
     cand_industry = {}
     for c in candidates:
@@ -238,6 +294,7 @@ def run_scan(progress_callback=None, cancel_check=None):
         "report_path": report_path,
         "index_data": index_data,
         "candidate_count": len(candidates),
+        "candidates_full": candidates,
         "industry_count": len(industry_stats),
         "total_stocks": sum(industry_stats.values()),
         "concentration": concentration,
@@ -281,7 +338,8 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
     r.append(f"| **合计** | **{sum(industry_stats.values())}** |")
 
     r.append(f"\n## 三、候选标的池\n")
-    r.append(f"筛选: PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%  |  共 **{len(candidates)}** 只\n")
+    mv_desc = f" | 流通市值 {FILTER_MV_MIN}-{FILTER_MV_MAX}亿" if ENABLE_MKTCAP else ""
+    r.append(f"筛选: PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%{mv_desc}  |  共 **{len(candidates)}** 只\n")
 
     # 行业集中度警告
     if top_industry and concentration >= 30:
@@ -289,14 +347,15 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
                  f"({cand_industry[top_industry]}/{len(candidates)})，注意分散风险。\n")
 
     if candidates:
-        r.append("| 代码 | 名称 | PE | ROE% | 价格 | 行业 | 营收增% | 利润增% |")
-        r.append("|------|------|-----|------|------|------|---------|---------|")
+        r.append("| 代码 | 名称 | PE | ROE% | 价格 | 流通市值(亿) | 行业 | 营收增% | 利润增% |")
+        r.append("|------|------|-----|------|------|------|------|---------|---------|")
         for c in candidates[:TOP_N]:
             pe_str = f"{c['pe']:.1f}" if c['pe'] else "-"
             price_str = f"{c['price']:.2f}" if c['price'] else "-"
+            mv_str = f"{c['mktcap']:.0f}" if c.get('mktcap') else "-"
             rev = f"{c['rev_growth']:.1f}" if c['rev_growth'] else "-"
             prof = f"{c['profit_growth']:.1f}" if c['profit_growth'] else "-"
-            r.append(f"| {c['code']} | {c['name']} | {pe_str} | {c['roe']:.1f} | {price_str} | {c['industry']} | {rev} | {prof} |")
+            r.append(f"| {c['code']} | {c['name']} | {pe_str} | {c['roe']:.1f} | {price_str} | {mv_str} | {c['industry']} | {rev} | {prof} |")
 
     r.append(f"\n## 四、下周关注\n")
     r.append("⏳ 待补充：政策事件、季报日历、解禁提醒")
