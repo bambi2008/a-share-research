@@ -282,7 +282,11 @@ def run_scan(progress_callback=None, cancel_check=None):
     # 保存
     now = datetime.now()
     week_num = now.isocalendar()[1]
-    script_dir = os.path.dirname(os.path.abspath(__file__))
+    import sys
+    if getattr(sys, 'frozen', False):
+        script_dir = os.path.dirname(sys.executable)
+    else:
+        script_dir = os.path.dirname(os.path.abspath(__file__))
     reports_dir = os.path.join(script_dir, "reports")
     os.makedirs(reports_dir, exist_ok=True)
     report_path = os.path.join(reports_dir, f"week_{week_num}.md")

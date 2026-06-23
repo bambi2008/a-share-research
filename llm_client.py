@@ -30,8 +30,16 @@ DEFAULT_CONFIG = {
 }
 
 
+def _app_dir():
+    """应用数据目录。打包成 .exe 时用 .exe 所在目录(持久)，否则用脚本目录。"""
+    import sys
+    if getattr(sys, 'frozen', False):
+        return os.path.dirname(sys.executable)
+    return os.path.dirname(os.path.abspath(__file__))
+
+
 def config_path():
-    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    return os.path.join(_app_dir(), "config.json")
 
 
 def load_config():
