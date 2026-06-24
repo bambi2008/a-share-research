@@ -50,8 +50,10 @@ def fetch_fundamentals(code, timeout=30):
 
 
 def fetch_news(code, name, timeout=20):
-    """抓取个股新闻标题(尽力而为)。东财源在Windows常不可用，失败返回空。"""
+    """抓取个股新闻标题。先试东财个股新闻(Windows偶发不可用)，失败则用同花顺全局新闻按名称匹配。"""
     titles = []
+
+    # 主源: 东财个股新闻
     try:
         df = scanner._fetch_with_timeout(ak.stock_news_em, timeout, symbol=code)
         if df is not None and len(df) > 0:
@@ -61,6 +63,21 @@ def fetch_news(code, name, timeout=20):
                     titles.append(str(t))
     except Exception:
         pass
+
+    # 备用源: 同花顺全局新闻(按股票名称关键词匹配)
+    if not titles:
+        try:
+            df = scanner._fetch_with_timeout(ak.stock_info_global_ths, timeout + 10)
+            if df is not None and len(df) > 0:
+                for _, row in df.iterrows():
+                    t = str(row.get("标题", ""))
+                    if name in t or code in t:
+                        titles.append(t)
+                    if len(titles) >= 5:
+                        break
+        except Exception:
+            pass
+
     return titles
 
 

@@ -13,6 +13,27 @@ from datetime import datetime, timedelta
 import concurrent.futures
 import os
 
+# ── 行业列表(从 industries.json 加载，不存在则用默认) ──
+def _load_industries():
+    import json, sys
+    p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "industries.json")
+    if getattr(sys, 'frozen', False):
+        p = os.path.join(os.path.dirname(sys.executable), "industries.json")
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            return json.load(f).get("industries", [])
+    except Exception:
+        return [
+            "半导体", "电子化学品Ⅱ", "软件开发", "IT服务Ⅱ",
+            "通信服务", "通信设备", "计算机设备",
+            "消费电子", "光学光电子", "其他电子Ⅱ", "军工电子Ⅱ",
+            "电池", "光伏设备", "电网设备",
+            "风电设备", "电力", "自动化设备",
+            "互联网电商", "厨卫电器",
+        ]
+
+TARGET_INDUSTRIES = _load_industries()
+
 # ── 配置 ──
 FILTER_PE_MIN, FILTER_PE_MAX = 3, 40
 FILTER_ROE_MIN = 5
@@ -24,14 +45,6 @@ ENABLE_DEDUCT_ROE = True # 是否补全扣非ROE并过滤
 TOP_N = 30
 FETCH_TIMEOUT = 90  # 单个数据请求超时(秒)
 
-TARGET_INDUSTRIES = [
-    "半导体", "电子化学品Ⅱ", "软件开发", "IT服务Ⅱ",
-    "通信服务", "通信设备", "计算机设备",
-    "消费电子", "光学光电子", "其他电子Ⅱ", "军工电子Ⅱ",
-    "电池", "光伏设备", "电网设备",
-    "风电设备", "电力", "自动化设备",
-    "互联网电商", "厨卫电器",
-]
 
 INDICES = [
     ("上证指数", "sh000001"),
@@ -337,10 +350,14 @@ def run_scan(progress_callback=None, cancel_check=None):
 
     log(f"  行业: {len(industry_stats)}个, 候选: {len(candidates)}只")
 
+    # ── 持仓体检 ──
+    import position
+    positions, __alerts = position.check_positions(price_map)
+
     # ── 5. 生成报告 ──
     log("5/5 生成报告...")
     report = _build_report(index_data, industry_stats, candidates, cand_industry,
-                           top_industry, concentration, ttm_available, q_latest)
+                           top_industry, concentration, ttm_available, q_latest, positions)
 
     # 保存
     now = datetime.now()
@@ -372,7 +389,7 @@ def run_scan(progress_callback=None, cancel_check=None):
 
 
 def _build_report(index_data, industry_stats, candidates, cand_industry,
-                  top_industry, concentration, ttm_available, q_latest):
+                  top_industry, concentration, ttm_available, q_latest, positions=None):
     now = datetime.now()
     week_start = now - timedelta(days=now.weekday())
     week_end = week_start + timedelta(days=4)
@@ -387,7 +404,7 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
     r.append(f"  PE算法: {pe_method}  |  报告期: {q_latest}")
     r.append("=" * 64)
 
-    r.append("\n## 一、大盘概况\n")
+    r.append("## 一、大盘概况\n")
     for name, info in index_data.items():
         close = info['close']
         chg = info['chg_pct']
@@ -396,6 +413,19 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
             r.append(f"| {name} | {close:>10.2f} | {chg:>+8.2f}% | {date} |")
         else:
             r.append(f"| {name} | - | - | 数据获取失败 |")
+
+    r.append("\n## 一、持仓体检\n")
+    if positions:
+        r.append("| 代码 | 名称 | 成本 | 现价 | 盈亏 | 买入日 |")
+        r.append("|------|------|------|------|------|--------|")
+        for p in positions:
+            pnl_str = f"{p['pnl_pct']:+.1f}%" if p['pnl_pct'] is not None else "-"
+            price_str = f"{p['price']:.2f}" if p['price'] else "-"
+            r.append(f"| {p['code']} | {p['name']} | {p['cost']} | {price_str} | {pnl_str} | {p['date']} |")
+            for alert in p.get("alerts", []):
+                r.append(f"  ⚠️ {alert}")
+    else:
+        r.append("  (未配置持仓)")
 
     r.append("\n## 二、行业扫描\n")
     r.append("| 行业 | 股票数 |")

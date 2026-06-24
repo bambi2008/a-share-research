@@ -245,6 +245,40 @@ def run_rolling_backtest(report_dates, hold_months=6, top_n=20, progress_callbac
 
     cum_return = (navs[-1] - 1) * 100
 
+    # ── 专业风险指标 ──
+    # Sortino: 下行标准差(只算负收益)
+    neg_returns = [r for r in port_returns if r < 0]
+    if neg_returns:
+        down_std = statistics.pstdev(neg_returns) if len(neg_returns) > 1 else statistics.pstdev(neg_returns + [0])
+        sortino = (avg_return / down_std) if down_std > 0 else None
+        sortino_annual = (sortino * (periods_per_year ** 0.5)) if sortino is not None else None
+    else:
+        sortino = sortino_annual = None  # 无下行期，Sortino无穷大
+
+    # Calmar: 年化收益 / 最大回撤
+    if max_dd > 0:
+        annual_return = ((1 + cum_return/100) ** (1/(n * hold_months/12)) - 1) * 100
+        calmar = annual_return / max_dd
+    else:
+        calmar = None
+
+    # Beta & Alpha vs 基准
+    beta = alpha = info_ratio = None
+    if len(bench_returns) == n:
+        # 用最小二乘: port_return = alpha + beta * bench_return
+        avg_bench = sum(bench_returns) / len(bench_returns)
+        covar = sum((pr - avg_return) * (br - avg_bench) for pr, br in zip(port_returns, bench_returns)) / n
+        bench_var = sum((br - avg_bench)**2 for br in bench_returns) / n
+        if bench_var > 0:
+            beta = covar / bench_var
+            alpha = avg_return - beta * avg_bench
+            # Alpha年化
+            alpha_annual = alpha * periods_per_year
+            # Information Ratio: 平均超额 / 超额标准差
+            excess_std = statistics.pstdev(excess_returns) if len(excess_returns) > 1 else 0
+            info_ratio = (avg_return - avg_bench) / excess_std if excess_std > 0 else None
+            info_annual = (info_ratio * (periods_per_year ** 0.5)) if info_ratio is not None else None
+
     return {
         "periods": periods,
         "n_periods": n,
@@ -255,6 +289,14 @@ def run_rolling_backtest(report_dates, hold_months=6, top_n=20, progress_callbac
         "avg_excess": (sum(excess_returns) / len(excess_returns)) if excess_returns else None,
         "sharpe": sharpe,
         "sharpe_annual": sharpe_annual,
+        "sortino": sortino,
+        "sortino_annual": sortino_annual,
+        "calmar": calmar,
+        "beta": beta,
+        "alpha": alpha,
+        "alpha_annual": alpha_annual if beta is not None else None,
+        "info_ratio": info_ratio,
+        "info_annual": info_annual if beta is not None else None,
         "max_drawdown": max_dd,
         "hold_months": hold_months,
         "top_n": top_n,
@@ -280,8 +322,17 @@ def build_rolling_report(result):
     r.append(f"| 盈利期数 | {result['win_periods']}/{result['n_periods']} |")
     r.append(f"| 跑赢基准期数 | {result['beat_bench']}/{result['n_periods']} |")
     if result['sharpe'] is not None:
-        r.append(f"| 期间夏普比率 | {result['sharpe']:.2f} |")
         r.append(f"| 年化夏普比率 | {result['sharpe_annual']:.2f} |")
+    if result.get('sortino_annual') is not None:
+        r.append(f"| 年化索提诺比率 | {result['sortino_annual']:.2f} (仅负收益波动) |")
+    if result.get('calmar') is not None:
+        r.append(f"| 卡尔玛比率 | {result['calmar']:.2f} (年化收益/最大回撤) |")
+    if result.get('beta') is not None:
+        r.append(f"| Beta | {result['beta']:.2f} |")
+    if result.get('alpha_annual') is not None:
+        r.append(f"| 年化Alpha | {result['alpha_annual']:+.2f}%/年 |")
+    if result.get('info_annual') is not None:
+        r.append(f"| 年化信息比率 | {result['info_annual']:.2f} |")
     r.append(f"| 最大回撤 | -{result['max_drawdown']:.1f}% |")
 
     # 夏普评价
