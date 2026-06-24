@@ -178,20 +178,25 @@ class ScanApp:
             return
         dlg = tk.Toplevel(self.root)
         dlg.title("回测设置")
-        dlg.geometry("340x200")
+        dlg.geometry("380x300")
         dlg.transient(self.root)
         dlg.grab_set()
 
-        ttk.Label(dlg, text="报告期 (YYYYMMDD):").pack(pady=(15, 2))
-        rd_var = tk.StringVar(value="20250331")
-        ttk.Entry(dlg, textvariable=rd_var, width=20).pack()
+        ttk.Label(dlg, text="回测模式:").pack(pady=(15, 2))
+        mode_var = tk.StringVar(value="多期滚动(推荐)")
+        ttk.Combobox(dlg, textvariable=mode_var,
+                     values=["多期滚动(推荐)", "单期"], width=22, state="readonly").pack()
+
+        ttk.Label(dlg, text="报告期(单期填1个/多期逗号分隔):").pack(pady=(10, 2))
+        rd_var = tk.StringVar(value="20240630,20240930,20241231,20250331")
+        ttk.Entry(dlg, textvariable=rd_var, width=42).pack()
 
         ttk.Label(dlg, text="持有月数:").pack(pady=(10, 2))
         hold_var = tk.StringVar(value="6")
         ttk.Combobox(dlg, textvariable=hold_var, values=["3", "6", "9", "12"], width=18).pack()
 
         ttk.Label(dlg, text="选股数(TopROE):").pack(pady=(10, 2))
-        top_var = tk.StringVar(value="20")
+        top_var = tk.StringVar(value="15")
         ttk.Entry(dlg, textvariable=top_var, width=20).pack()
 
         def go():
@@ -202,10 +207,32 @@ class ScanApp:
             except ValueError:
                 messagebox.showerror("输入错误", "月数和选股数必须是整数")
                 return
+            multi = mode_var.get().startswith("多期")
             dlg.destroy()
-            self._start_backtest(rd, months, topn)
+            if multi:
+                dates = [d.strip() for d in rd.split(",") if d.strip()]
+                self._start_rolling(dates, months, topn)
+            else:
+                self._start_backtest(rd.split(",")[0].strip(), months, topn)
 
         ttk.Button(dlg, text="开始回测", command=go).pack(pady=14)
+
+    def _start_rolling(self, dates, months, topn):
+        self._set_busy(True, "多期回测中...")
+        self.text.delete(1.0, tk.END)
+        self.status_var.set(f"多期回测 {len(dates)}期 持有{months}月...")
+        threading.Thread(target=self._rolling_thread, args=(dates, months, topn), daemon=True).start()
+
+    def _rolling_thread(self, dates, months, topn):
+        try:
+            result = backtest.run_rolling_backtest(
+                dates, hold_months=months, top_n=topn,
+                progress_callback=lambda m: self.q.put(("progress", m)),
+            )
+            report = backtest.build_rolling_report(result)
+            self.q.put(("backtest_done", report))
+        except Exception as e:
+            self.q.put(("error", str(e)))
 
     def _start_backtest(self, rd, months, topn):
         self._set_busy(True, "回测中...")

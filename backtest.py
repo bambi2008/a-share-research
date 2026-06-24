@@ -11,6 +11,9 @@ import pandas as pd
 from datetime import datetime, timedelta
 import scanner
 
+# 交易成本(单边): 佣金万2.5 + 印花税千1(卖出) + 滑点千1 ≈ 双边约0.35%
+TXN_COST_PCT = 0.35  # 双边总成本(%)
+
 
 def _sina_symbol(code):
     if code.startswith(('60', '68', '90', '11', '51')):
@@ -85,7 +88,7 @@ def run_backtest(report_date, hold_months=6, top_n=20, progress_callback=None):
         entry_p = _price_on_or_after(p['code'], entry_date)
         exit_p = _price_on_or_after(p['code'], exit_date)
         if entry_p and exit_p and entry_p > 0:
-            ret = (exit_p - entry_p) / entry_p * 100
+            ret = (exit_p - entry_p) / entry_p * 100 - TXN_COST_PCT  # 扣除双边交易成本
             p['entry'] = entry_p
             p['exit'] = exit_p
             p['return'] = ret
@@ -176,7 +179,136 @@ def build_backtest_report(result):
     for p in result['picks']:
         r.append(f"| {p['code']} | {p['name']} | {p['entry']:.2f} | {p['exit']:.2f} | {p['return']:+.1f} | {p['industry']} |")
 
-    r.append(f"\n---\n*回测基于历史数据，不代表未来表现。已用前复权价格。*")
+    r.append(f"\n---\n*回测基于历史数据，不代表未来表现。已用前复权价格，已扣除约{TXN_COST_PCT}%双边交易成本。*")
+    return "\n".join(r)
+
+
+def run_rolling_backtest(report_dates, hold_months=6, top_n=20, progress_callback=None):
+    """多期滚动回测。
+    report_dates: 报告期列表，如 ['20240331','20240630','20240930','20241231','20250331']
+    对每期跑单期回测，汇总组合收益序列，算夏普/最大回撤/累计收益。
+    """
+    def log(m):
+        if progress_callback:
+            progress_callback(m)
+        else:
+            print(f"  {m}")
+
+    periods = []
+    for i, rd in enumerate(report_dates, 1):
+        log(f"[{i}/{len(report_dates)}] 回测报告期 {rd}...")
+        try:
+            res = run_backtest(rd, hold_months=hold_months, top_n=top_n,
+                               progress_callback=lambda m: None)
+            if res:
+                periods.append(res)
+                log(f"  {rd}: 组合{res['portfolio_return']:+.1f}% 基准"
+                    f"{res['bench_return']:+.1f}% 超额"
+                    f"{(res['excess_return'] or 0):+.1f}%" if res['bench_return'] is not None
+                    else f"  {rd}: 组合{res['portfolio_return']:+.1f}%")
+        except Exception as e:
+            log(f"  {rd}: 失败 {type(e).__name__}")
+
+    if not periods:
+        return None
+
+    # 汇总统计
+    port_returns = [p['portfolio_return'] for p in periods]
+    bench_returns = [p['bench_return'] for p in periods if p['bench_return'] is not None]
+    excess_returns = [p['excess_return'] for p in periods if p['excess_return'] is not None]
+
+    n = len(port_returns)
+    avg_return = sum(port_returns) / n
+    win_periods = sum(1 for r in port_returns if r > 0)
+    beat_bench = sum(1 for p in periods if p['excess_return'] is not None and p['excess_return'] > 0)
+
+    # 夏普比率(按期收益，年化需考虑持有期)。这里用简单期间夏普: mean/std
+    import statistics
+    std = statistics.pstdev(port_returns) if n > 1 else 0
+    sharpe = (avg_return / std) if std > 0 else None
+    # 年化夏普(假设每持有期=hold_months, 一年期数=12/hold_months)
+    periods_per_year = 12 / hold_months
+    sharpe_annual = (sharpe * (periods_per_year ** 0.5)) if sharpe is not None else None
+
+    # 最大回撤(基于累计净值序列)
+    nav = 1.0
+    navs = [nav]
+    for r in port_returns:
+        nav *= (1 + r / 100)
+        navs.append(nav)
+    peak = navs[0]
+    max_dd = 0
+    for v in navs:
+        peak = max(peak, v)
+        dd = (peak - v) / peak * 100
+        max_dd = max(max_dd, dd)
+
+    cum_return = (navs[-1] - 1) * 100
+
+    return {
+        "periods": periods,
+        "n_periods": n,
+        "avg_return": avg_return,
+        "cum_return": cum_return,
+        "win_periods": win_periods,
+        "beat_bench": beat_bench,
+        "avg_excess": (sum(excess_returns) / len(excess_returns)) if excess_returns else None,
+        "sharpe": sharpe,
+        "sharpe_annual": sharpe_annual,
+        "max_drawdown": max_dd,
+        "hold_months": hold_months,
+        "top_n": top_n,
+    }
+
+
+def build_rolling_report(result):
+    if result is None:
+        return "多期回测失败：无有效数据"
+    r = []
+    r.append("=" * 64)
+    r.append("  策略多期滚动回测报告")
+    r.append("=" * 64)
+    r.append(f"\n回测期数: {result['n_periods']} 期  |  每期持有: {result['hold_months']}个月  |  每期选股: {result['top_n']}只")
+
+    r.append(f"\n## 核心指标\n")
+    r.append("| 指标 | 数值 |")
+    r.append("|------|------|")
+    r.append(f"| 累计收益(复利) | {result['cum_return']:+.1f}% |")
+    r.append(f"| 平均每期收益 | {result['avg_return']:+.2f}% |")
+    if result['avg_excess'] is not None:
+        r.append(f"| 平均超额收益 | {result['avg_excess']:+.2f}% |")
+    r.append(f"| 盈利期数 | {result['win_periods']}/{result['n_periods']} |")
+    r.append(f"| 跑赢基准期数 | {result['beat_bench']}/{result['n_periods']} |")
+    if result['sharpe'] is not None:
+        r.append(f"| 期间夏普比率 | {result['sharpe']:.2f} |")
+        r.append(f"| 年化夏普比率 | {result['sharpe_annual']:.2f} |")
+    r.append(f"| 最大回撤 | -{result['max_drawdown']:.1f}% |")
+
+    # 夏普评价
+    sa = result['sharpe_annual']
+    if sa is not None:
+        if sa >= 1.5:
+            sj = "优秀(≥1.5)"
+        elif sa >= 1.0:
+            sj = "良好(1.0-1.5)"
+        elif sa >= 0.5:
+            sj = "一般(0.5-1.0)"
+        else:
+            sj = "较弱(<0.5)"
+        r.append(f"\n> 年化夏普 {sa:.2f} — {sj}")
+
+    r.append(f"\n## 各期明细\n")
+    r.append("| 报告期 | 建仓 | 平仓 | 组合% | 基准% | 超额% | 胜率 |")
+    r.append("|--------|------|------|-------|-------|-------|------|")
+    for p in result['periods']:
+        br = f"{p['bench_return']:+.1f}" if p['bench_return'] is not None else "-"
+        ex = f"{p['excess_return']:+.1f}" if p['excess_return'] is not None else "-"
+        r.append(f"| {p['report_date']} | {p['entry_date']} | {p['exit_date']} | "
+                 f"{p['portfolio_return']:+.1f} | {br} | {ex} | {p['win_rate']:.0f}% |")
+
+    r.append(f"\n---")
+    r.append(f"*多期回测已扣除约{TXN_COST_PCT}%双边交易成本，使用前复权价格。*")
+    r.append(f"*夏普比率基于期间收益估算，假设无风险利率为0。回测不代表未来表现。*")
     return "\n".join(r)
 
 

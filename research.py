@@ -122,7 +122,12 @@ def build_prompt(stock, fundamentals, news_titles):
 
 **6. 综合结论**: 一句话给出关注度评级(重点关注/谨慎关注/观望)及核心逻辑
 
-注意: 你的分析仅供投资参考，不构成投资建议。避免给出具体目标价。""")
+## 严格要求(防止编造)
+- **只能基于上面提供的数据和你的公开知识进行分析**。
+- **凡是上面数据未提供的具体数字(如订单金额、产能、市占率、机构目标价等)，绝对不要编造**；如需提及，必须写明"(注:此为推测，未经数据验证)"。
+- 区分【事实】(来自上方数据)与【推测】(你的判断)，在涉及前瞻判断时用"预计/可能/或将"等措辞。
+- 不要给出具体目标价或买卖点。
+- 你的分析仅供研究参考，不构成投资建议。""")
 
     return "\n".join(lines)
 
@@ -154,6 +159,11 @@ def research_stock(stock, progress_callback=None):
         "industry": stock.get("industry"),
         "has_news": len(news) > 0,
         "has_fundamentals": fundamentals.get("financials") is not None,
+        "news_count": len(news),
+        "roe": stock.get("roe"),
+        "deduct_roe": stock.get("deduct_roe"),
+        "pe": stock.get("pe"),
+        "mktcap": stock.get("mktcap"),
         "analysis": analysis,
     }
 
@@ -193,6 +203,9 @@ def build_research_report(results, scan_summary=""):
     r.append("  A股科技+新能源 深度研究报告")
     r.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')}  |  LLM驱动前瞻分析")
     r.append("=" * 64)
+    r.append("\n> ⚠️ **AI 生成内容免责声明**")
+    r.append("> 以下分析由大语言模型基于公开财务数据与新闻标题生成，**可能包含事实错误或幻觉**。")
+    r.append("> 所有前瞻判断均为模型推测，非确定性结论。投资决策前**务必自行核实关键数据**。")
     if scan_summary:
         r.append(f"\n{scan_summary}")
     r.append(f"\n本报告对候选池前 {len(results)} 只个股做 6-12 月前瞻分析。\n")
@@ -207,11 +220,30 @@ def build_research_report(results, scan_summary=""):
         flag_str = f"  [{' '.join(flags)}]" if flags else ""
         r.append(f"### {i}. {res['name']} ({res['code']})  —  {res.get('industry','')}{flag_str}")
         r.append(f"{'─'*60}")
+        # 数据来源行(让用户知道分析基于什么)
+        roe = res.get("roe")
+        droe = res.get("deduct_roe")
+        pe = res.get("pe")
+        mv = res.get("mktcap")
+        nc = res.get("news_count", 0)
+        src = []
+        if roe is not None:
+            src.append(f"ROE {roe:.1f}%")
+        if droe is not None:
+            src.append(f"扣非ROE {droe:.1f}%")
+        if pe is not None:
+            src.append(f"PE {pe:.1f}")
+        if mv is not None:
+            src.append(f"市值 {mv:.0f}亿")
+        src.append(f"财报{'✓' if res.get('has_fundamentals') else '✗'}")
+        src.append(f"新闻{nc}条")
+        r.append(f"*分析依据: {' | '.join(src)} (巨潮+新浪+同花顺)*\n")
         r.append(res["analysis"])
 
     r.append(f"\n\n{'='*64}")
     r.append("风险提示: 本报告由 AI 基于公开数据生成，仅供研究参考，不构成投资建议。")
     r.append("AI 分析可能存在事实错误或幻觉，请务必自行核实关键信息。")
+    r.append("数据来源: 巨潮资讯(财报) + 新浪财经(行情) + 同花顺(财务摘要)。")
     r.append("=" * 64)
     return "\n".join(r)
 

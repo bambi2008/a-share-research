@@ -16,9 +16,11 @@ import os
 # ── 配置 ──
 FILTER_PE_MIN, FILTER_PE_MAX = 3, 40
 FILTER_ROE_MIN = 5
+FILTER_DEDUCT_ROE_MIN = 3   # 扣非ROE下限(%)，低于此剔除(扣非后盈利质量差)
 FILTER_MV_MIN = 50       # 流通市值下限(亿)
 FILTER_MV_MAX = 10000    # 流通市值上限(亿)
 ENABLE_MKTCAP = True     # 是否补全市值并过滤(对候选逐只请求，较慢)
+ENABLE_DEDUCT_ROE = True # 是否补全扣非ROE并过滤
 TOP_N = 30
 FETCH_TIMEOUT = 90  # 单个数据请求超时(秒)
 
@@ -82,6 +84,51 @@ def _fetch_float_mktcap(ak, code):
         if shares and close:
             return close * shares / 1e8  # 流通市值(亿)
         return None
+    except Exception:
+        return None
+
+
+def _parse_cn_amount(s):
+    """解析中文金额字符串(如'21.71亿'、'-3.2万'、'15.70%')为float。失败返None"""
+    if s is None:
+        return None
+    s = str(s).strip().replace(',', '').replace('%', '')
+    if s in ('', '-', 'False', 'nan', 'None'):
+        return None
+    mult = 1.0
+    if s.endswith('亿'):
+        mult = 1e8; s = s[:-1]
+    elif s.endswith('万'):
+        mult = 1e4; s = s[:-1]
+    try:
+        return float(s) * mult
+    except ValueError:
+        return None
+
+
+def _fetch_deduct_roe(ak, code, fallback_roe=None):
+    """获取扣非ROE(%)。同花顺财务摘要有扣非净利润+净利润+ROE，
+    扣非ROE ≈ 净资产收益率 × (扣非净利润 / 净利润)。
+    返回 None 表示获取失败。
+    """
+    try:
+        df = _fetch_with_timeout(
+            ak.stock_financial_abstract_ths, 25,
+            symbol=code, indicator="按报告期"
+        )
+        if df is None or len(df) == 0:
+            return None
+        latest = df.iloc[-1]
+        roe = _parse_cn_amount(latest.get('净资产收益率'))
+        np_ = _parse_cn_amount(latest.get('净利润'))
+        deduct_np = _parse_cn_amount(latest.get('扣非净利润'))
+        if roe is None:
+            roe = fallback_roe
+        if roe is None or np_ is None or deduct_np is None or np_ == 0:
+            return None
+        # 扣非占比(可能>1或<0)
+        ratio = deduct_np / np_
+        return roe * ratio
     except Exception:
         return None
 
@@ -241,28 +288,44 @@ def run_scan(progress_callback=None, cancel_check=None):
 
     candidates.sort(key=lambda x: x['roe'] or 0, reverse=True)
 
-    # ── 4.5 市值补全与过滤（仅对候选逐只请求） ──
-    if ENABLE_MKTCAP and candidates:
-        log(f"  补全市值({len(candidates)}只)...")
+    # ── 4.5 候选逐只补全: 市值 + 扣非ROE（合并到一个循环） ──
+    if (ENABLE_MKTCAP or ENABLE_DEDUCT_ROE) and candidates:
+        log(f"  补全市值/扣非ROE({len(candidates)}只)...")
         filtered = []
         for i, c in enumerate(candidates):
             check_cancel()
-            mv = _fetch_float_mktcap(ak, c['code'])
-            c['mktcap'] = mv  # 流通市值(亿)，None表示获取失败
-            if mv is None:
-                # 获取失败：保留但标注，不因网络问题误杀
+            keep = True
+
+            # 市值
+            if ENABLE_MKTCAP:
+                mv = _fetch_float_mktcap(ak, c['code'])
+                c['mktcap'] = mv
+                if mv is not None and not (FILTER_MV_MIN <= mv <= FILTER_MV_MAX):
+                    keep = False
+            else:
+                c['mktcap'] = None
+
+            # 扣非ROE
+            if ENABLE_DEDUCT_ROE and keep:
+                droe = _fetch_deduct_roe(ak, c['code'], fallback_roe=c['roe'])
+                c['deduct_roe'] = droe
+                # 扣非ROE获取成功且低于下限则剔除(盈利质量差/含大量非经常损益)
+                if droe is not None and droe < FILTER_DEDUCT_ROE_MIN:
+                    keep = False
+            else:
+                c['deduct_roe'] = None
+
+            if keep:
                 filtered.append(c)
-            elif FILTER_MV_MIN <= mv <= FILTER_MV_MAX:
-                filtered.append(c)
-            # 超出市值范围则剔除
             if (i + 1) % 10 == 0:
-                log(f"    市值进度 {i+1}/{len(candidates)}")
+                log(f"    进度 {i+1}/{len(candidates)}")
         removed = len(candidates) - len(filtered)
         candidates = filtered
-        log(f"  市值过滤: 剔除 {removed} 只(范围 {FILTER_MV_MIN}-{FILTER_MV_MAX}亿), 剩 {len(candidates)} 只")
+        log(f"  市值+扣非ROE过滤: 剔除 {removed} 只, 剩 {len(candidates)} 只")
     else:
         for c in candidates:
             c['mktcap'] = None
+            c['deduct_roe'] = None
 
     # 行业集中度（候选池层面）
     cand_industry = {}
@@ -351,15 +414,16 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
                  f"({cand_industry[top_industry]}/{len(candidates)})，注意分散风险。\n")
 
     if candidates:
-        r.append("| 代码 | 名称 | PE | ROE% | 价格 | 流通市值(亿) | 行业 | 营收增% | 利润增% |")
-        r.append("|------|------|-----|------|------|------|------|---------|---------|")
+        r.append("| 代码 | 名称 | PE | ROE% | 扣非ROE% | 价格 | 流通市值(亿) | 行业 | 营收增% | 利润增% |")
+        r.append("|------|------|-----|------|---------|------|------|------|---------|---------|")
         for c in candidates[:TOP_N]:
             pe_str = f"{c['pe']:.1f}" if c['pe'] else "-"
             price_str = f"{c['price']:.2f}" if c['price'] else "-"
             mv_str = f"{c['mktcap']:.0f}" if c.get('mktcap') else "-"
+            droe_str = f"{c['deduct_roe']:.1f}" if c.get('deduct_roe') is not None else "-"
             rev = f"{c['rev_growth']:.1f}" if c['rev_growth'] else "-"
             prof = f"{c['profit_growth']:.1f}" if c['profit_growth'] else "-"
-            r.append(f"| {c['code']} | {c['name']} | {pe_str} | {c['roe']:.1f} | {price_str} | {mv_str} | {c['industry']} | {rev} | {prof} |")
+            r.append(f"| {c['code']} | {c['name']} | {pe_str} | {c['roe']:.1f} | {droe_str} | {price_str} | {mv_str} | {c['industry']} | {rev} | {prof} |")
 
     r.append(f"\n## 四、下周关注\n")
     r.append("⏳ 待补充：政策事件、季报日历、解禁提醒")
