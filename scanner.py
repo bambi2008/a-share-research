@@ -37,13 +37,18 @@ TARGET_INDUSTRIES = _load_industries()
 # ── 配置 ──
 FILTER_PE_MIN, FILTER_PE_MAX = 3, 40
 FILTER_ROE_MIN = 5
-FILTER_DEDUCT_ROE_MIN = 3   # 扣非ROE下限(%)，低于此剔除(扣非后盈利质量差)
-FILTER_MV_MIN = 50       # 流通市值下限(亿)
-FILTER_MV_MAX = 10000    # 流通市值上限(亿)
-ENABLE_MKTCAP = True     # 是否补全市值并过滤(对候选逐只请求，较慢)
-ENABLE_DEDUCT_ROE = True # 是否补全扣非ROE并过滤
+FILTER_DEDUCT_ROE_MIN = 3
+FILTER_MV_MIN, FILTER_MV_MAX = 50, 10000
+ENABLE_MKTCAP = True
+ENABLE_DEDUCT_ROE = True
 TOP_N = 30
-FETCH_TIMEOUT = 90  # 单个数据请求超时(秒)
+FETCH_TIMEOUT = 180
+
+# 成长股模式: 放宽PE+ROE，关注营收增长
+GROWTH_MODE = False
+GROWTH_PE_MAX = 200     # 成长股PE上限更宽
+GROWTH_ROE_MIN = 0      # 成长股允许不赚钱
+GROWTH_REV_MIN = 20     # 但营收必须增长>20%
 
 
 INDICES = [
@@ -274,8 +279,15 @@ def run_scan(progress_callback=None, cancel_check=None):
         industry_stats[industry] = industry_stats.get(industry, 0) + 1
 
         roe = row.get('净资产收益率')
-        if pd.isna(roe) or roe < FILTER_ROE_MIN:
+        roe_min = GROWTH_ROE_MIN if GROWTH_MODE else FILTER_ROE_MIN
+        if pd.isna(roe) or roe < roe_min:
             continue
+
+        # 成长股模式: 营收增长要求
+        rev_g = row.get('营业总收入-同比增长')
+        if GROWTH_MODE:
+            if pd.isna(rev_g) or rev_g < GROWTH_REV_MIN:
+                continue
 
         code = str(row['股票代码'])
         price = price_map.get(code)
@@ -285,10 +297,10 @@ def run_scan(progress_callback=None, cancel_check=None):
         else:
             pe = price / teps
 
-        if pe is not None and (pe < FILTER_PE_MIN or pe > FILTER_PE_MAX):
+        pe_max = GROWTH_PE_MAX if GROWTH_MODE else FILTER_PE_MAX
+        if pe is not None and (pe < FILTER_PE_MIN or pe > pe_max):
             continue
 
-        rev_g = row.get('营业总收入-同比增长')
         profit_g = row.get('净利润-同比增长')
 
         candidates.append({
@@ -370,8 +382,12 @@ def run_scan(progress_callback=None, cancel_check=None):
     reports_dir = os.path.join(script_dir, "reports")
     os.makedirs(reports_dir, exist_ok=True)
     report_path = os.path.join(reports_dir, f"week_{week_num}.md")
-    with open(report_path, 'w', encoding='utf-8') as f:
-        f.write(report)
+    try:
+        with open(report_path, 'w', encoding='utf-8') as f:
+            f.write(report)
+    except Exception as e:
+        log(f"  ⚠️ 报告保存失败: {e} (路径:{report_path})")
+        print(f"DEBUG: script_dir={script_dir}, reports_dir={reports_dir}", file=sys.stderr)
 
     return {
         "report": report,
@@ -436,7 +452,11 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
 
     r.append(f"\n## 三、候选标的池\n")
     mv_desc = f" | 流通市值 {FILTER_MV_MIN}-{FILTER_MV_MAX}亿" if ENABLE_MKTCAP else ""
-    r.append(f"筛选: PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%{mv_desc}  |  共 **{len(candidates)}** 只\n")
+    if GROWTH_MODE:
+        filter_desc = f"成长模式: PE<{GROWTH_PE_MAX} | 营收增长>{GROWTH_REV_MIN}%{mv_desc}"
+    else:
+        filter_desc = f"筛选: PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%{mv_desc}"
+    r.append(f"{filter_desc}  |  共 **{len(candidates)}** 只\n")
 
     # 行业集中度警告
     if top_industry and concentration >= 30:
