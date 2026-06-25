@@ -222,22 +222,22 @@ def run_rolling_backtest(report_dates, hold_months=6, top_n=20, progress_callbac
     win_periods = sum(1 for r in port_returns if r > 0)
     beat_bench = sum(1 for p in periods if p['excess_return'] is not None and p['excess_return'] > 0)
 
-    # 夏普比率(按期收益，年化需考虑持有期)。这里用简单期间夏普: mean/std
+    # 夏普比率(按期收益，年化需考虑持有期)
+    # 简单收益率下: 年化夏普 = 期间夏普 × √(年化期数)
     import statistics
     std = statistics.pstdev(port_returns) if n > 1 else 0
     sharpe = (avg_return / std) if std > 0 else None
-    # 年化夏普(假设每持有期=hold_months, 一年期数=12/hold_months)
     periods_per_year = 12 / hold_months
     sharpe_annual = (sharpe * (periods_per_year ** 0.5)) if sharpe is not None else None
 
-    # 最大回撤(基于累计净值序列)
+    # 最大回撤(基于累计净值序列，逐期追踪peak-to-trough)
     nav = 1.0
     navs = [nav]
     for r in port_returns:
         nav *= (1 + r / 100)
         navs.append(nav)
     peak = navs[0]
-    max_dd = 0
+    max_dd = 0.0
     for v in navs:
         peak = max(peak, v)
         dd = (peak - v) / peak * 100
@@ -246,38 +246,43 @@ def run_rolling_backtest(report_dates, hold_months=6, top_n=20, progress_callbac
     cum_return = (navs[-1] - 1) * 100
 
     # ── 专业风险指标 ──
-    # Sortino: 下行标准差(只算负收益)
+    # Sortino: 下行标准差(只算负收益，用样本标准差stdev更保守)
     neg_returns = [r for r in port_returns if r < 0]
-    if neg_returns:
-        down_std = statistics.pstdev(neg_returns) if len(neg_returns) > 1 else statistics.pstdev(neg_returns + [0])
+    if len(neg_returns) >= 2:
+        down_std = statistics.stdev(neg_returns)  # N-1分母，更保守
         sortino = (avg_return / down_std) if down_std > 0 else None
         sortino_annual = (sortino * (periods_per_year ** 0.5)) if sortino is not None else None
+    elif len(neg_returns) == 1:
+        # 只有一个负值，近似用其绝对值作为波动率
+        sortino = avg_return / abs(neg_returns[0]) if neg_returns[0] != 0 else None
+        sortino_annual = (sortino * (periods_per_year ** 0.5)) if sortino is not None else None
     else:
-        sortino = sortino_annual = None  # 无下行期，Sortino无穷大
+        sortino = sortino_annual = None  # 无下行期
 
-    # Calmar: 年化收益 / 最大回撤
-    if max_dd > 0:
-        annual_return = ((1 + cum_return/100) ** (1/(n * hold_months/12)) - 1) * 100
+    # Calmar: 年化简单收益率 / 最大回撤(有除零保护)
+    if max_dd > 0.01:  # 回撤太小时(如全正期)卡尔玛无意义
+        annual_return = avg_return * periods_per_year  # 简单年化
         calmar = annual_return / max_dd
     else:
         calmar = None
 
-    # Beta & Alpha vs 基准
-    beta = alpha = info_ratio = None
+    # Beta & Alpha vs 基准(最小二乘)
+    beta = alpha = alpha_annual = info_ratio = info_annual = None
     if len(bench_returns) == n:
-        # 用最小二乘: port_return = alpha + beta * bench_return
-        avg_bench = sum(bench_returns) / len(bench_returns)
-        covar = sum((pr - avg_return) * (br - avg_bench) for pr, br in zip(port_returns, bench_returns)) / n
+        avg_bench = sum(bench_returns) / n
+        covar_num = sum((pr - avg_return) * (br - avg_bench) for pr, br in zip(port_returns, bench_returns))
         bench_var = sum((br - avg_bench)**2 for br in bench_returns) / n
         if bench_var > 0:
-            beta = covar / bench_var
+            beta = covar_num / n / bench_var  # cov = covar_num/n, var = bench_var
+            # 单期Alpha = avg_port - beta * avg_bench
             alpha = avg_return - beta * avg_bench
-            # Alpha年化
+            # Alpha年化: 单期Alpha × periods_per_year (简单年化)
             alpha_annual = alpha * periods_per_year
-            # Information Ratio: 平均超额 / 超额标准差
-            excess_std = statistics.pstdev(excess_returns) if len(excess_returns) > 1 else 0
-            info_ratio = (avg_return - avg_bench) / excess_std if excess_std > 0 else None
-            info_annual = (info_ratio * (periods_per_year ** 0.5)) if info_ratio is not None else None
+            # Information Ratio: 超额收益 / 跟踪误差(超额标准差)
+            if len(excess_returns) >= 2:
+                tracking_error = statistics.stdev(excess_returns)
+                info_ratio = (avg_return - avg_bench) / tracking_error if tracking_error > 0 else None
+                info_annual = (info_ratio * (periods_per_year ** 0.5)) if info_ratio is not None else None
 
     return {
         "periods": periods,
