@@ -307,7 +307,7 @@ class Terminal:
 
     def _show_portfolio(self):
         """显示投资记录本"""
-        import portfolio, tkinter.simpledialog as sd
+        import portfolio
         data = portfolio.load()
         # 用扫描结果里的价格（如果有的话）
         pm = {}

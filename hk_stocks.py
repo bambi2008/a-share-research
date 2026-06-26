@@ -32,11 +32,19 @@ WATCHLIST = [
 
 
 def fetch_hk_watchlist(timeout=60):
-    """获取港股关注列表实时数据"""
+    """获取港股关注列表实时数据。主源:新浪 stock_hk_spot → 备用:东财 stock_hk_spot_em"""
+    df = None
+    # 主源: 新浪(Windows兼容)
     try:
-        df = ak.stock_hk_spot_em()
-    except Exception as e:
-        return [], f"港股数据获取失败: {e}"
+        df = ak.stock_hk_spot()
+    except Exception:
+        pass
+    # 备用: 东财
+    if df is None:
+        try:
+            df = ak.stock_hk_spot_em()
+        except Exception as e:
+            return [], f"港股数据获取失败(所有源): {e}"
 
     results = []
     for name, code, sector in WATCHLIST:

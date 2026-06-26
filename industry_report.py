@@ -62,6 +62,7 @@ def build_research_prompt(candidates, industries, search_results, scan_summary):
         "## 分析要求",
         "",
         "请输出以下四个板块的结构化分析(每板块3-5条核心判断):",
+        "格式: 纯文本不用markdown。用【一、】做标题，· 做条目，用箭头连接因果。直接输出，不要代码块包裹。",
         "",
         "**一、产业景气度**: 候选涉及的行业未来6-12月供需/技术/政策趋势",
         "",
