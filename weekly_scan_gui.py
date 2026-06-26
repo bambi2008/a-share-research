@@ -116,6 +116,8 @@ class SimpleApp:
         bar = tk.Frame(self.root, bg="#e5e7eb", height=30)
         bar.pack(fill=tk.X, side=tk.BOTTOM)
         bar.pack_propagate(False)
+        tk.Button(bar, text="🇭🇰 港股监控", font=("微软雅黑", 9), bg="#e5e7eb", bd=0,
+                  command=self._show_hk, cursor="hand2").pack(side=tk.RIGHT, padx=8, pady=3)
         tk.Button(bar, text="设置AI账号", font=("微软雅黑", 9), bg="#e5e7eb", bd=0,
                   command=self._settings, cursor="hand2").pack(side=tk.RIGHT, padx=12, pady=3)
         tk.Button(bar, text="保存报告", font=("微软雅黑", 9), bg="#e5e7eb", bd=0,
@@ -344,6 +346,29 @@ class SimpleApp:
                   command=test,cursor="hand2").pack(side=tk.LEFT,padx=6)
         tk.Button(tf,text="取消",command=dlg.destroy).pack(side=tk.LEFT,padx=6)
 
+    # ── 港股监控 ──
+    def _show_hk(self):
+        if self.busy: return
+        self.busy = True
+        self.prog_bar.start(8)
+        self.prog_label.config(text="获取港股数据…")
+        self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
+        self.summary.insert(tk.END, "🇭🇰 正在获取港股实时行情…\n"); self.summary.config(state=tk.DISABLED)
+        if self.tree: self.tree.destroy(); self.tree=None
+
+        def fetch():
+            try:
+                import hk_stocks
+                results, err = hk_stocks.fetch_hk_watchlist()
+                if err:
+                    self.q.put(("err", err))
+                    return
+                # 显示为表格
+                self.q.put(("hk_done", results))
+            except Exception as e:
+                self.q.put(("err", str(e)))
+        threading.Thread(target=fetch, daemon=True).start()
+
     # ── 保存 ──
     def _save(self):
         if not self.last_scan: return
@@ -413,6 +438,32 @@ class SimpleApp:
                     rt.insert(tk.END, m)
                     self.text_widget = rt
                     self.prog_label.config(text="✅ 产业研报完成")
+                elif k == "hk_done":
+                    self.busy=False; self.prog_bar.stop()
+                    self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
+                    self.summary.insert(tk.END, f"🇭🇰 港股核心标的 | 共 {len(m)} 只\n"); self.summary.config(state=tk.DISABLED)
+                    # 构建表格
+                    cols=("代码","名称","行业","最新价","涨跌幅")
+                    tree=ttk.Treeview(self.tree_frame, columns=cols, show="headings", height=16)
+                    for c in cols:
+                        tree.heading(c, text=c)
+                        tree.column(c, width=90 if c in ("代码","行业") else 100, anchor="center", minwidth=60)
+                    tree.tag_configure("up", foreground="#16a34a")
+                    tree.tag_configure("down", foreground="#dc2626")
+                    for r in m:
+                        chg=r.get("chg_pct")
+                        tag="up" if chg and chg>0 else "down" if chg and chg<0 else ""
+                        tree.insert("", tk.END, values=(
+                            r["code"], r["name"], r["sector"],
+                            f"{r['price']:.2f}" if r["price"] else "-",
+                            f"{chg:+.2f}%" if chg is not None else "-"
+                        ), tags=(tag,))
+                    vsb=ttk.Scrollbar(self.tree_frame,orient="vertical",command=tree.yview)
+                    tree.configure(yscrollcommand=vsb.set)
+                    tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+                    vsb.pack(side=tk.RIGHT, fill=tk.Y)
+                    self.tree=tree
+                    self.prog_label.config(text="✅ 港股数据已更新")
                 elif k == "backtest_done":
                     self.busy=False; self.prog_bar.stop()
                     self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
