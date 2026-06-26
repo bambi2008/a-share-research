@@ -199,15 +199,25 @@ def run_scan(progress_callback=None, cancel_check=None):
     index_data = {}
     for name, sym in INDICES:
         check_cancel()
-        try:
-            df = _fetch_with_timeout(ak.stock_zh_index_daily, FETCH_TIMEOUT, symbol=sym)
-            latest = df.iloc[-1]
-            prev = df.iloc[-6] if len(df) >= 6 else df.iloc[0]
-            close = latest['close']
-            chg = (close - prev['close']) / prev['close'] * 100
-            index_data[name] = {"close": close, "chg_pct": chg, "date": str(latest['date'])[:10]}
-        except Exception:
-            index_data[name] = {"close": None, "chg_pct": None, "date": None}
+        close = chg = date = None
+        # 尝试最多2次
+        for attempt in range(2):
+            try:
+                df = _fetch_with_timeout(ak.stock_zh_index_daily, FETCH_TIMEOUT, symbol=sym)
+                if df is not None and len(df) > 0:
+                    latest = df.iloc[-1]
+                    prev = df.iloc[-6] if len(df) >= 6 else df.iloc[0]
+                    close = float(latest['close'])
+                    chg = (close - float(prev['close'])) / float(prev['close']) * 100
+                    date = str(latest['date'])[:10]
+                    break
+            except Exception:
+                if attempt == 0: import time; time.sleep(1)
+        index_data[name] = {"close": close, "chg_pct": chg, "date": date}
+        if close:
+            log(f"  {name}: {close:.0f} ({chg:+.1f}%)")
+        else:
+            log(f"  {name}: ⚠️ 获取失败")
 
     # ── 2. 季报(TTM需3期) ──
     q_latest, q_annual, q_prev = _report_quarter_dates()
