@@ -15,7 +15,6 @@ if _MEIPASS and _MEIPASS not in sys.path:
 _exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
 if _exe_dir not in sys.path:
     sys.path.insert(0, _exe_dir)
-import portfolio
 
 
 # ── 主题配色 ──
@@ -286,187 +285,40 @@ class Terminal:
             self._status(f"已保存: {p}", GREEN)
 
     def _show_portfolio(self):
-        """显示投资记录本"""
-        data = portfolio.load()
-        # 用扫描结果里的价格（如果有的话）
-        pm = {}
-        if self.last_scan:
-            for c in self.last_scan.get("candidates_full") or []:
-                if c.get("price"):
-                    pm[c["code"]] = c["price"]
-        status = portfolio.get_portfolio_status(pm)
-
-        # 构建表格
-        cols = ("代码","名称","持仓(股)","均价","现价","市值","盈亏","盈亏%")
-        rows = []
-        for h in status["holdings"]:
-            pnl_str = f"{h['pnl']:+.0f}" if h['pnl'] else "-"
-            pnl_pct_str = f"{h['pnl_pct']:+.1f}%" if h['pnl_pct'] else "-"
-            rows.append((
-                h["code"], h["name"], str(h["shares"]),
-                f"{h['avg_cost']:.2f}", f"{h['price']:.2f}" if h['price'] else "-",
-                f"{h['market_value']:.0f}" if h['market_value'] else "-",
-                pnl_str, pnl_pct_str
-            ))
-
-        # 显示表格 + 总览
-        self._show_table(cols, rows, height=14)
-        total = status["total_value"]
-        self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
-        self.summary.insert(tk.END, f"💰 总资产: {total:,.0f}  现金: {data['cash']:,.0f}")
-        self.summary.config(state=tk.DISABLED)
-        self._status(f"📒 投资记录 | 总资产 {total:,.0f} | 现金 {data['cash']:,.0f}", TEXT)
-
-        # 弹出操作对话框
-        dlg = tk.Toplevel(self.root); dlg.title("记录交易"); dlg.geometry("340x300")
-        dlg.configure(bg=CARD); dlg.transient(self.root); dlg.grab_set()
-        tk.Label(dlg, text="记录买卖", font=("微软雅黑", 12, "bold"), fg=TEXT, bg=CARD).pack(pady=(14,8))
-        tk.Label(dlg, text="股票代码:", fg=TEXT2, bg=CARD).pack()
-        code_var = tk.StringVar()
-        tk.Entry(dlg, textvariable=code_var, width=20, bg=CARD2, fg=TEXT, relief="flat", bd=1).pack(pady=2, ipady=3)
-        tk.Label(dlg, text="价格(元):", fg=TEXT2, bg=CARD).pack()
-        price_var = tk.StringVar()
-        tk.Entry(dlg, textvariable=price_var, width=20, bg=CARD2, fg=TEXT, relief="flat", bd=1).pack(pady=2, ipady=3)
-        tk.Label(dlg, text="数量(股):", fg=TEXT2, bg=CARD).pack()
-        shares_var = tk.StringVar()
-        tk.Entry(dlg, textvariable=shares_var, width=20, bg=CARD2, fg=TEXT, relief="flat", bd=1).pack(pady=2, ipady=3)
-        tk.Label(dlg, text="日期(可选,如2026-06-25):", fg=TEXT2, bg=CARD).pack()
-        date_var = tk.StringVar()
-        tk.Entry(dlg, textvariable=date_var, width=20, bg=CARD2, fg=TEXT, relief="flat", bd=1).pack(pady=2, ipady=3)
-
-        def do_buy():
-            try:
-                code=code_var.get().strip(); price=float(price_var.get()); shares=int(shares_var.get())
-                d=date_var.get().strip() or None
-                import akshare as ak
-                df=ak.stock_zh_a_spot()
-                nm=""; pm2={}
-                for _,r in df.iterrows():
-                    c=str(r['代码']).replace('bj','').replace('sh','').replace('sz','')
-                    if c==code: nm=str(r['名称']); break
-                t=portfolio.buy(code, nm or code, price, shares, d)
-                messagebox.showinfo("买入成功", f"{code} {nm} {shares}股 @ {price}")
-                dlg.destroy(); self._show_portfolio()
-            except Exception as e: messagebox.showerror("错误", str(e))
-        def do_sell():
-            try:
-                code=code_var.get().strip(); price=float(price_var.get()); shares=int(shares_var.get())
-                d=date_var.get().strip() or None
-                t=portfolio.sell(code, price, shares, d)
-                if t: messagebox.showinfo("卖出成功", f"{code} {shares}股 @ {price}"); dlg.destroy(); self._show_portfolio()
-                else: messagebox.showerror("错误", "持仓不足")
-            except Exception as e: messagebox.showerror("错误", str(e))
-
-        f=tk.Frame(dlg, bg=CARD); f.pack(pady=12)
-        tk.Button(f,text="买入",font=("微软雅黑",11),bg=GREEN,fg="white",bd=0,padx=16,pady=6,command=do_buy,cursor="hand2").pack(side=tk.LEFT,padx=6)
-        tk.Button(f,text="卖出",font=("微软雅黑",11),bg=RED,fg="white",bd=0,padx=16,pady=6,command=do_sell,cursor="hand2").pack(side=tk.LEFT,padx=6)
-
-    def _settings(self):
-        cfg = llm_client.load_config()
-        dlg = tk.Toplevel(self.root); dlg.title("AI 账号设置"); dlg.geometry("420x300")
-        dlg.configure(bg=CARD); dlg.transient(self.root); dlg.grab_set()
-        tk.Label(dlg, text="AI 服务商", font=("微软雅黑", 9, "bold"), fg=TEXT, bg=CARD).pack(pady=(16, 4))
-        pv = tk.StringVar(value="deepseek")
-        cb = ttk.Combobox(dlg, textvariable=pv, values=list(llm_client.PRESETS.keys()), width=44); cb.pack()
-        tk.Label(dlg, text="API Key", font=("微软雅黑", 9, "bold"), fg=TEXT, bg=CARD).pack(pady=(10, 4))
-        kv = tk.StringVar(value=cfg.get("api_key", ""))
-        tk.Entry(dlg, textvariable=kv, width=46, show="*", bg=CARD2, fg=TEXT, insertbackground=TEXT,
-                 relief="flat", bd=1).pack(ipady=4)
-        tk.Label(dlg, text="Base URL", font=("微软雅黑", 9, "bold"), fg=TEXT, bg=CARD).pack(pady=(10, 4))
-        uv = tk.StringVar(value=cfg.get("base_url", ""))
-        tk.Entry(dlg, textvariable=uv, width=46, bg=CARD2, fg=TEXT, insertbackground=TEXT,
-                 relief="flat", bd=1).pack(ipady=4)
-        mv = tk.StringVar(value=cfg.get("model", ""))
-        def on_preset(_):
-            p = pv.get()
-            if p in llm_client.PRESETS: uv.set(llm_client.PRESETS[p]["base_url"]); mv.set(llm_client.PRESETS[p]["model"])
-        cb.bind("<<ComboboxSelected>>", on_preset)
-        def test():
-            llm_client.save_config(api_key=kv.get().strip(), base_url=uv.get().strip(), model=mv.get().strip())
-            try:
-                r = llm_client.chat([{"role":"user","content":"回复OK"}], max_tokens=10, timeout=20)
-                messagebox.showinfo("成功", f"连接正常: {r[:30]}"); dlg.destroy()
-            except Exception as e: messagebox.showerror("失败", str(e))
-        tf = tk.Frame(dlg, bg=CARD); tf.pack(pady=14)
-        tk.Button(tf, text="测试并保存", font=("微软雅黑", 10), bg=ACCENT, fg="white", bd=0,
-                  padx=16, pady=6, cursor="hand2", command=test).pack(side=tk.LEFT, padx=6)
-        tk.Button(tf, text="取消", font=("微软雅黑", 10), bg=CARD2, fg=TEXT, bd=0,
-                  padx=16, pady=6, cursor="hand2", command=dlg.destroy).pack(side=tk.LEFT, padx=6)
-
-    # ═══════════ 队列 ═══════════
-    def _poll(self):
+        """投资记录本 — 自包含版本"""
         try:
-            while True:
-                k, m = self.q.get_nowait()
-                if k == "prog": self._status(m[:36], ACCENT)
-                elif k == "scan_done":
-                    self.busy = False; self.prog.stop(); self._status(f"✅ {m['candidate_count']}只候选", GREEN)
-                    self.last_scan = m
-                    # 启用分析按钮 + 查看扫描结果
-                    self.research_btn.config(state=tk.NORMAL)
-                    self.ind_report_btn.config(state=tk.NORMAL)
-                    self.view_scan_btn.config(state=tk.DISABLED)
-                    self.advice_btn.config(state=tk.NORMAL)
-                    # 摘要
-                    self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
-                    cands = m.get("candidates_full") or []
-                    s = f"PE 3-40 | ROE>5% | 市值50-10000亿\n{m['candidate_count']}只候选 | {m['industry_count']}行业 | {m['total_stocks']}只覆盖"
-                    conc = m.get("concentration", 0)
-                    if conc >= 30: s += f"\n⚠️ 集中度 {m.get('top_industry','')} {conc:.0f}%"
-                    # 数据源指示
-                    ds = m.get("data_sources", {})
-                    if ds:
-                        s += f"\n数据: 行情{ds.get('price','?')} | 指数{ds.get('index','?')} | 季报{ds.get('quarterly','?')}"
-                    self.summary.insert(tk.END, s)
-                    self.summary.config(state=tk.DISABLED)
-                    # 表格
-                    if cands:
-                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","营收增%","利润增%")
-                        rows = []
-                        for c in cands[:40]:
-                            pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
-                            roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
-                            droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
-                            price = f"{c.get('price',0):.2f}" if c.get('price') else "-"
-                            mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
-                            rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
-                            prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
-                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), rev, prof))
-                        self._show_table(cols, rows, height=22)
-                elif k == "research_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 深度分析完成", PURPLE)
-                    self.research_btn.config(state=tk.NORMAL)
-                    self.view_scan_btn.config(state=tk.NORMAL)
-                    self._show_text(m, ("微软雅黑", 10))
-                elif k == "industry_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 产业研报完成", TEAL)
-                    self.ind_report_btn.config(state=tk.NORMAL)
-                    self.view_scan_btn.config(state=tk.NORMAL)
-                    self._show_text(m, ("微软雅黑", 10))
-                elif k == "advice_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 投资建议已生成", "#f59e0b")
-                    self.advice_btn.config(state=tk.NORMAL)
-                    self.view_scan_btn.config(state=tk.NORMAL)
-                    self._show_text(m, ("微软雅黑", 10))
-                elif k == "hk_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 港股数据已更新", "#6366f1")
-                    cols = ("代码","名称","行业","最新价","涨跌幅")
-                    rows = []
-                    for r in m:
-                        chg = r.get("chg_pct")
-                        rows.append((r["code"], r["name"], r["sector"],
-                            f"{r['price']:.2f}" if r["price"] else "-",
-                            f"{chg:+.2f}%" if chg is not None else "-"))
-                    self._show_table(cols, rows, height=16)
-                elif k == "cancelled":
-                    self.busy = False; self.prog.stop(); self._status("已取消", TEXT2)
-                elif k == "err":
-                    self.busy = False; self.prog.stop(); self._status(f"❌ {m[:30]}", RED)
-                    self._show_text(f"😞 出错了\n\n{m}\n\n常见原因: 网络太慢 / API限流 → 重试一次")
-        except queue.Empty: pass
-        self.root.after(200, self._poll)
-
-    def run(self): self.root.mainloop()
-
-if __name__ == "__main__":
-    Terminal().run()
+            # ── 数据加载（内联，不依赖portfolio.py导入） ──
+            import json, os as _os, sys as _sys
+            _app_dir = _os.path.dirname(_sys.executable) if getattr(_sys, 'frozen', False) else _os.path.dirname(_os.path.abspath(__file__))
+            _pf = _os.path.join(_app_dir, 'portfolio.json')
+            if _os.path.exists(_pf):
+                data = json.load(open(_pf, 'r', encoding='utf-8'))
+            else:
+                data = {"cash": 100000, "trades": [], "holdings": {}}
+            
+            # ── 持仓表格 ──
+            cols = ("代码","名称","持仓(股)","均价","现价","市值","盈亏","盈亏%")
+            rows = []
+            for code, h in data.get("holdings", {}).items():
+                price = None
+                if self.last_scan:
+                    for c in self.last_scan.get("candidates_full") or []:
+                        if c.get("code") == code: price = c.get("price"); break
+                mv = price * h["shares"] if price else 0
+                pnl = (price - h["avg_cost"]) * h["shares"] if price else 0
+                pnl_pct = (price / h["avg_cost"] - 1) * 100 if price and h["avg_cost"] > 0 else 0
+                rows.append((code, h["name"], str(h["shares"]),
+                    f"{h['avg_cost']:.2f}", f"{price:.2f}" if price else "-",
+                    f"{mv:.0f}" if mv else "-",
+                    f"{pnl:+.0f}" if pnl else "-",
+                    f"{pnl_pct:+.1f}%" if pnl_pct else "-"))
+            
+            self._show_table(cols, rows, height=14)
+            total = data["cash"] + sum(r[5] for r in rows)
+            self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
+            self.summary.insert(tk.END, f"总资产: {total:,.0f}  现金: {data['cash']:,.0f}")
+            self.summary.config(state=tk.DISABLED)
+            self._status(f"总资产 {total:,.0f} | 现金 {data['cash']:,.0f}", TEXT)
+        except Exception as e:
+            self._status(f"投资记录错误: {e}", RED)
+            messagebox.showerror("投资记录", str(e))
