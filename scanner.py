@@ -50,6 +50,24 @@ GROWTH_PE_MAX = 200     # 成长股PE上限更宽
 GROWTH_ROE_MIN = 0      # 成长股允许不赚钱
 GROWTH_REV_MIN = 20     # 但营收必须增长>20%
 
+# 爆发模式: 寻找翻番潜力的高成长股(核心卫星的"卫星"部分)
+# 设计依据:
+#   · 黄仁勋 GTC 2026: AI算力需求至少1万亿美元到2027
+#   · Altman: "基础设施是最大瓶颈" — 成长公司高PE/负PE是投资期正常现象
+#   · Musk/雷军: 2026=人形机器人量产元年,供应链爆发
+#   · 李开复: 2026=企业AI Agent上岗元年,To B场景营收爆发
+#   · 黄仁勋: "Agent不断生成子Agent,推理算力指数增长"
+#   · 低空经济/eVTOL: 2027商业化元年,沃兰特融资50亿
+#   · AI制药: 晶泰首次盈利,首个AI全流程药进入III期
+BOOM_MODE = False
+BOOM_REV_MIN = 30       # 营收增长>30%(抓住爆发拐点)
+BOOM_SECTORS = [         # 只在这些爆发行业里找(基于产业研判)
+    "半导体", "软件开发", "IT服务Ⅱ", "通信设备", "计算机设备",
+    "自动化设备", "光学光电子", "消费电子",
+    "航空装备Ⅱ", "航天装备Ⅱ",
+    "电池", "光伏设备", "电网设备",
+]
+
 
 INDICES = [
     ("上证指数", "sh000001"),
@@ -281,13 +299,21 @@ def run_scan(progress_callback=None, cancel_check=None):
         industry_stats[industry] = industry_stats.get(industry, 0) + 1
 
         roe = row.get('净资产收益率')
-        roe_min = GROWTH_ROE_MIN if GROWTH_MODE else FILTER_ROE_MIN
-        if pd.isna(roe) or roe < roe_min:
-            continue
+        # 爆发模式: 不看ROE, 看重营收爆发
+        if BOOM_MODE:
+            if industry not in BOOM_SECTORS:
+                continue
+            rev_g = row.get('营业总收入-同比增长')
+            if pd.isna(rev_g) or rev_g < BOOM_REV_MIN:
+                continue
+        else:
+            roe_min = GROWTH_ROE_MIN if GROWTH_MODE else FILTER_ROE_MIN
+            if pd.isna(roe) or roe < roe_min:
+                continue
 
         # 成长股模式: 营收增长要求
         rev_g = row.get('营业总收入-同比增长')
-        if GROWTH_MODE:
+        if GROWTH_MODE and not BOOM_MODE:
             if pd.isna(rev_g) or rev_g < GROWTH_REV_MIN:
                 continue
 
@@ -299,9 +325,11 @@ def run_scan(progress_callback=None, cancel_check=None):
         else:
             pe = price / teps
 
-        pe_max = GROWTH_PE_MAX if GROWTH_MODE else FILTER_PE_MAX
-        if pe is not None and (pe < FILTER_PE_MIN or pe > pe_max):
-            continue
+        # 爆发模式: 不看PE
+        if not BOOM_MODE:
+            pe_max = GROWTH_PE_MAX if GROWTH_MODE else FILTER_PE_MAX
+            if pe is not None and (pe < FILTER_PE_MIN or pe > pe_max):
+                continue
 
         profit_g = row.get('净利润-同比增长')
 
@@ -313,7 +341,10 @@ def run_scan(progress_callback=None, cancel_check=None):
             'profit_growth': profit_g if not pd.isna(profit_g) else None,
         })
 
-    candidates.sort(key=lambda x: x['roe'] or 0, reverse=True)
+    if BOOM_MODE:
+        candidates.sort(key=lambda x: x.get('rev_growth') or 0, reverse=True)
+    else:
+        candidates.sort(key=lambda x: x['roe'] or 0, reverse=True)
 
     # ── 4.5 候选逐只补全: 市值 + 扣非ROE（合并到一个循环） ──
     if (ENABLE_MKTCAP or ENABLE_DEDUCT_ROE) and candidates:
@@ -332,12 +363,14 @@ def run_scan(progress_callback=None, cancel_check=None):
             else:
                 c['mktcap'] = None
 
-            # 扣非ROE
+            # 扣非ROE — 确定性保障: 接口失败用季度ROE fallback, 不一致时也保留
             if ENABLE_DEDUCT_ROE and keep:
                 droe = _fetch_deduct_roe(ak, c['code'], fallback_roe=c['roe'])
+                # 接口失败: 用季度ROE, 不剔除 (宁可多留不可因网络原因漏掉)
+                if droe is None:
+                    droe = c['roe'] if c['roe'] is not None else FILTER_DEDUCT_ROE_MIN
                 c['deduct_roe'] = droe
-                # 扣非ROE获取成功且低于下限则剔除(盈利质量差/含大量非经常损益)
-                if droe is not None and droe < FILTER_DEDUCT_ROE_MIN:
+                if droe < FILTER_DEDUCT_ROE_MIN:
                     keep = False
             else:
                 c['deduct_roe'] = None
@@ -459,11 +492,17 @@ def _build_report(index_data, industry_stats, candidates, cand_industry,
 
     r.append(f"\n## 三、候选标的池\n")
     mv_desc = f" | 流通市值 {FILTER_MV_MIN}-{FILTER_MV_MAX}亿" if ENABLE_MKTCAP else ""
-    if GROWTH_MODE:
+    if BOOM_MODE:
+        filter_desc = f"💥 爆发模式(卫星): 营收>{BOOM_REV_MIN}% | 不限PE/ROE | 关注营收加速度"
+        r.append(f"{filter_desc}  |  共 **{len(candidates)}** 只\n")
+        r.append(f"\n> 设计依据: 黄仁勋GTC2026(算力万亿到2027)、Musk/雷军(机器人量产元年)、"
+                 f"李开复(企业AI Agent上岗)、低空经济2027商业化\n")
+    elif GROWTH_MODE:
         filter_desc = f"成长模式: PE<{GROWTH_PE_MAX} | 营收增长>{GROWTH_REV_MIN}%{mv_desc}"
+        r.append(f"{filter_desc}  |  共 **{len(candidates)}** 只\n")
     else:
-        filter_desc = f"筛选: PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%{mv_desc}"
-    r.append(f"{filter_desc}  |  共 **{len(candidates)}** 只\n")
+        filter_desc = f"筛选(核心): PE {FILTER_PE_MIN}-{FILTER_PE_MAX} | ROE > {FILTER_ROE_MIN}%{mv_desc}"
+        r.append(f"{filter_desc}  |  共 **{len(candidates)}** 只\n")
 
     # 行业集中度警告
     if top_industry and concentration >= 30:

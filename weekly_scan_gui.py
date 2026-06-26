@@ -45,6 +45,7 @@ class Terminal:
         self.busy, self.cancel_flag = False, False
         self.last_scan = None
         self.growth_var = tk.BooleanVar(value=False)
+        self.boom_var = tk.BooleanVar(value=False)
 
         self._build()
         self._poll()
@@ -161,6 +162,7 @@ class Terminal:
         self.busy = True; self.cancel_flag = False
         self.prog.start(8); self._status("扫描中…", ACCENT)
         scanner.GROWTH_MODE = self.growth_var.get()
+        scanner.BOOM_MODE = self.boom_var.get()
         self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
         self.summary.insert(tk.END, "🔍 扫描 A 股…")
         self.summary.config(state=tk.DISABLED)
@@ -183,6 +185,7 @@ class Terminal:
             return
         cands_orig = self.last_scan.get("candidates_full") or []
         # 成长股模式：营收增长优先；价值模式：ROE优先
+        tk.Checkbutton(opts, text="爆发模式(卫星)", variable=self.boom_var, font=("微软雅黑", 9), fg="#f59e0b", bg=CARD, selectcolor=CARD, cursor="hand2").pack(side=tk.LEFT, padx=6)
         if self.growth_var.get():
             cands = sorted(cands_orig, key=lambda x: x.get('rev_growth') or 0, reverse=True)
             mode_hint = "营收增长"
