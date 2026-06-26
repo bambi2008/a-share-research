@@ -195,29 +195,17 @@ def run_scan(progress_callback=None, cancel_check=None):
             raise ScanCancelled("用户取消扫描")
 
     # ── 1. 大盘指数 ──
-    log("1/5 大盘指数...")
-    index_data = {}
-    for name, sym in INDICES:
-        check_cancel()
-        close = chg = date = None
-        # 尝试最多2次
-        for attempt in range(2):
-            try:
-                df = _fetch_with_timeout(ak.stock_zh_index_daily, FETCH_TIMEOUT, symbol=sym)
-                if df is not None and len(df) > 0:
-                    latest = df.iloc[-1]
-                    prev = df.iloc[-6] if len(df) >= 6 else df.iloc[0]
-                    close = float(latest['close'])
-                    chg = (close - float(prev['close'])) / float(prev['close']) * 100
-                    date = str(latest['date'])[:10]
-                    break
-            except Exception:
-                if attempt == 0: import time; time.sleep(1)
-        index_data[name] = {"close": close, "chg_pct": chg, "date": date}
-        if close:
-            log(f"  {name}: {close:.0f} ({chg:+.1f}%)")
-        else:
-            log(f"  {name}: ⚠️ 获取失败")
+    # ── 1. 大盘指数（多源容灾） ──
+    import data_source
+    index_data, idx_src = data_source.get_index_data(FETCH_TIMEOUT)
+    for name in index_data:
+        c = index_data[name].get("close")
+        ch = index_data[name].get("chg_pct")
+        if c:
+            log(f"  {name}: {c:.0f} ({ch:+.1f}%)")
+    if not index_data:
+        log("  ⚠️ 指数获取失败(所有源)")
+    log(f"  指数源: {idx_src}")
 
     # ── 2. 季报(TTM需3期) ──
     q_latest, q_annual, q_prev = _report_quarter_dates()
@@ -266,15 +254,12 @@ def run_scan(progress_callback=None, cancel_check=None):
             return eps_latest[code] * factor
         return None
 
-    # ── 3. 实时价格 ──
-    log("3/5 实时行情(新浪)...")
+    # ── 3. 实时价格（多源容灾） ──
+    log("3/5 实时行情...")
     check_cancel()
-    df_price = _fetch_with_timeout(ak.stock_zh_a_spot, FETCH_TIMEOUT + 60)  # 新浪70页慢，多给时间
-    price_map = {}
-    for _, row in df_price.iterrows():
-        code = str(row['代码']).replace('bj', '').replace('sh', '').replace('sz', '')
-        price_map[code] = row['最新价']
-    log(f"  价格覆盖: {len(price_map)} 只")
+    import data_source as ds
+    price_map, price_src = ds.get_price_map(FETCH_TIMEOUT)
+    log(f"  价格覆盖: {len(price_map)} 只 (源: {price_src})")
 
     # ── 4. 筛选 ──
     log("4/5 筛选...")
@@ -411,6 +396,11 @@ def run_scan(progress_callback=None, cancel_check=None):
         "top_industry": top_industry,
         "ttm_available": ttm_available,
         "scan_time": now.strftime('%Y-%m-%d %H:%M'),
+        "data_sources": {
+            "index": idx_src,
+            "price": price_src,
+            "quarterly": "巨潮资讯",
+        }
     }
 
 

@@ -434,6 +434,10 @@ class Terminal:
                     s = f"PE 3-40 | ROE>5% | 市值50-10000亿\n{m['candidate_count']}只候选 | {m['industry_count']}行业 | {m['total_stocks']}只覆盖"
                     conc = m.get("concentration", 0)
                     if conc >= 30: s += f"\n⚠️ 集中度 {m.get('top_industry','')} {conc:.0f}%"
+                    # 数据源指示
+                    ds = m.get("data_sources", {})
+                    if ds:
+                        s += f"\n数据: 行情{ds.get('price','?')} | 指数{ds.get('index','?')} | 季报{ds.get('quarterly','?')}"
                     self.summary.insert(tk.END, s)
                     self.summary.config(state=tk.DISABLED)
                     # 表格
