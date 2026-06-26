@@ -8,6 +8,14 @@ from tkinter import ttk, messagebox, filedialog
 import threading, queue
 from datetime import datetime
 import scanner, backtest, research, llm_client
+import sys, os
+_MEIPASS = getattr(sys, "_MEIPASS", "")
+if _MEIPASS and _MEIPASS not in sys.path:
+    sys.path.insert(0, _MEIPASS)
+_exe_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+if _exe_dir not in sys.path:
+    sys.path.insert(0, _exe_dir)
+import portfolio
 
 
 # ── 主题配色 ──
@@ -88,9 +96,9 @@ class Terminal:
                       cursor="hand2", command=cmd).pack(side=tk.RIGHT, padx=8, pady=2)
 
     def _btn(self, parent, text, color, cmd, disabled=False):
-        b = tk.Button(parent, text=text, font=("微软雅黑", 10, "bold"),
+        b = tk.Button(parent, text=text, font=("微软雅黑", 9, "bold"),
                       bg=color, fg="white", activebackground=color, activeforeground="white",
-                      relief="flat", bd=0, padx=14, pady=8, cursor="hand2",
+                      relief="flat", bd=0, padx=10, pady=4, cursor="hand2",
                       command=cmd, state=tk.DISABLED if disabled else tk.NORMAL)
         return b
 
@@ -279,7 +287,6 @@ class Terminal:
 
     def _show_portfolio(self):
         """显示投资记录本"""
-        import portfolio
         data = portfolio.load()
         # 用扫描结果里的价格（如果有的话）
         pm = {}
@@ -358,14 +365,14 @@ class Terminal:
         cfg = llm_client.load_config()
         dlg = tk.Toplevel(self.root); dlg.title("AI 账号设置"); dlg.geometry("420x300")
         dlg.configure(bg=CARD); dlg.transient(self.root); dlg.grab_set()
-        tk.Label(dlg, text="AI 服务商", font=("微软雅黑", 10, "bold"), fg=TEXT, bg=CARD).pack(pady=(16, 4))
+        tk.Label(dlg, text="AI 服务商", font=("微软雅黑", 9, "bold"), fg=TEXT, bg=CARD).pack(pady=(16, 4))
         pv = tk.StringVar(value="deepseek")
         cb = ttk.Combobox(dlg, textvariable=pv, values=list(llm_client.PRESETS.keys()), width=44); cb.pack()
-        tk.Label(dlg, text="API Key", font=("微软雅黑", 10, "bold"), fg=TEXT, bg=CARD).pack(pady=(10, 4))
+        tk.Label(dlg, text="API Key", font=("微软雅黑", 9, "bold"), fg=TEXT, bg=CARD).pack(pady=(10, 4))
         kv = tk.StringVar(value=cfg.get("api_key", ""))
         tk.Entry(dlg, textvariable=kv, width=46, show="*", bg=CARD2, fg=TEXT, insertbackground=TEXT,
                  relief="flat", bd=1).pack(ipady=4)
-        tk.Label(dlg, text="Base URL", font=("微软雅黑", 10, "bold"), fg=TEXT, bg=CARD).pack(pady=(10, 4))
+        tk.Label(dlg, text="Base URL", font=("微软雅黑", 9, "bold"), fg=TEXT, bg=CARD).pack(pady=(10, 4))
         uv = tk.StringVar(value=cfg.get("base_url", ""))
         tk.Entry(dlg, textvariable=uv, width=46, bg=CARD2, fg=TEXT, insertbackground=TEXT,
                  relief="flat", bd=1).pack(ipady=4)
