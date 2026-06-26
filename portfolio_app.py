@@ -70,7 +70,8 @@ class App:
         self.total_label.config(text=f"总资产 {total:,.0f}    现金 {d['cash']:,.0f}")
 
     def _trade(self, action):
-        dlg = tk.Toplevel(self.root); dlg.title(action); dlg.geometry("320x280")
+        dlg = tk.Toplevel(self.root); dlg.title(action); dlg.geometry("340x360")
+        dlg.resizable(False, False)
         dlg.configure(bg="#1a1d27"); dlg.transient(self.root); dlg.grab_set()
         tk.Label(dlg, text=action, font=("微软雅黑",13,"bold"), fg="#e2e8f0", bg="#1a1d27").pack(pady=12)
         fields = [("股票代码:","code"),("价格(元):","price"),("数量(股):","shares"),("日期(可不填):","date")]
