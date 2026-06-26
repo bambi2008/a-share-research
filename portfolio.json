@@ -1,0 +1,31 @@
+{
+  "cash": 7200.0,
+  "trades": [
+    {
+      "type": "buy",
+      "code": "600519",
+      "name": "贵州茅台",
+      "price": 1870.5,
+      "shares": 100,
+      "cost": 187050.0,
+      "date": "2026-06-25"
+    },
+    {
+      "type": "sell",
+      "code": "600519",
+      "name": "贵州茅台",
+      "price": 1885.0,
+      "shares": 50,
+      "revenue": 94250.0,
+      "date": "2026-06-26"
+    }
+  ],
+  "holdings": {
+    "600519": {
+      "shares": 50,
+      "cost_basis": 187050.0,
+      "avg_cost": 1870.5,
+      "name": "贵州茅台"
+    }
+  }
+}

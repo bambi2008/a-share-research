@@ -74,6 +74,13 @@ def _fetch_with_timeout(fn, timeout, *args, **kwargs):
     except concurrent.futures.TimeoutError:
         ex.shutdown(wait=False)
         raise TimeoutError(f"数据请求超时(>{timeout}s)")
+    except Exception as e:
+        # zlib 解压错误等数据损坏异常
+        ex.shutdown(wait=False)
+        msg = str(e)
+        if "decompress" in msg.lower() or "header check" in msg.lower() or "error -3" in msg.lower():
+            raise RuntimeError(f"数据传输损坏(可能是代理/VPN导致): {msg[:80]}")
+        raise
 
 
 def _fetch_float_mktcap(ak, code):

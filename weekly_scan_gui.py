@@ -59,48 +59,20 @@ class Terminal:
         main.pack(fill=tk.BOTH, expand=True, padx=12, pady=(6, 4))
 
         # 左栏: 指数 + 按钮 + 摘要
-        left = tk.Frame(main, bg=CARD, width=280, highlightbackground=BORDER, highlightthickness=1)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
-        left.pack_propagate(False)
-
-        # 按钮组
-        btns = tk.Frame(left, bg=CARD)
-        btns.pack(fill=tk.X, padx=12, pady=(10, 4))
-        self.scan_btn = self._btn(btns, "开始扫描", ACCENT, self._scan)
-        self.scan_btn.pack(fill=tk.X, pady=2)
-        self.research_btn = self._btn(btns, "深度分析", PURPLE, self._research, disabled=True)
-        self.research_btn.pack(fill=tk.X, pady=2)
-        self.ind_report_btn = self._btn(btns, "产业研报", TEAL, self._ind_report, disabled=True)
-        self.ind_report_btn.pack(fill=tk.X, pady=2)
-        self.view_scan_btn = self._btn(btns, "查看扫描结果", "#475569", self._view_scan, disabled=True)
-        self.view_scan_btn.pack(fill=tk.X, pady=2)
-        self._btn(btns, "港股监控", "#6366f1", self._show_hk).pack(fill=tk.X, pady=2)
-        self.advice_btn = self._btn(btns, "💰 投资建议", "#f59e0b", self._get_advice, disabled=True)
-        self.advice_btn.pack(fill=tk.X, pady=2)
-        self._btn(btns, "📒 我的投资", "#ec4899", self._show_portfolio).pack(fill=tk.X, pady=2)
-
-        # 成长股开关
-        opts = tk.Frame(left, bg=CARD)
-        opts.pack(fill=tk.X, padx=14, pady=(6, 4))
-        tk.Checkbutton(opts, text="成长股模式 (放宽PE/ROE)", variable=self.growth_var,
-                       font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
-                       activebackground=CARD, activeforeground=TEXT,
-                       cursor="hand2").pack(side=tk.LEFT)
-        tk.Label(opts, text="?", font=("微软雅黑", 9, "bold"), fg=TEXT2, bg=CARD,
-                 cursor="hand2").pack(side=tk.RIGHT)
-
-        # 摘要条
-        sep = tk.Frame(left, bg=BORDER, height=1); sep.pack(fill=tk.X, padx=12, pady=4)
-        self.summary = tk.Text(left, font=("微软雅黑", 9), bg=CARD, fg=TEXT2,
-                               height=6, relief="flat", bd=0, padx=12, pady=6,
-                               wrap=tk.WORD, state=tk.DISABLED)
-        self.summary.pack(fill=tk.BOTH, expand=True, padx=2, pady=(0, 8))
-
-        # 底部进度
-        self.prog = ttk.Progressbar(left, mode='indeterminate', length=100)
-        self.prog.pack(fill=tk.X, padx=12, pady=(0, 8))
-
-        # 右栏: 数据区 (表格/文本)
+        # ── 左侧滚动面板 ──
+        left_outer = tk.Frame(main, bg=CARD, width=280, highlightbackground=BORDER, highlightthickness=1)
+        left_outer.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
+        left_outer.pack_propagate(False)
+        
+        left_canvas = tk.Canvas(left_outer, bg=CARD, width=278, highlightthickness=0, bd=0)
+        left_scroll = ttk.Scrollbar(left_outer, orient="vertical", command=left_canvas.yview)
+        left_canvas.configure(yscrollcommand=left_scroll.set)
+        left_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        left_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        
+        left = tk.Frame(left_canvas, bg=CARD)
+        left.bind("<Configure>", lambda e: left_canvas.configure(scrollregion=left_canvas.bbox("all")))
+        left_canvas.create_window((0,0), window=left, anchor="nw", width=264)
         right = tk.Frame(main, bg=CARD, highlightbackground=BORDER, highlightthickness=1)
         right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.right = right
