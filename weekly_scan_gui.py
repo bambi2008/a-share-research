@@ -38,6 +38,7 @@ class Terminal:
         self.busy, self.cancel_flag = False, False
         self.last_scan = None
         self.growth_var = tk.BooleanVar(value=False)
+        self.boom_var = tk.BooleanVar(value=False)
 
         self._build()
         self._poll()
@@ -86,6 +87,7 @@ class Terminal:
                        font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
                        activebackground=CARD, activeforeground=TEXT,
                        cursor="hand2").pack(side=tk.LEFT)
+        tk.Checkbutton(opts, text="卫星", variable=self.boom_var).pack(side=tk.LEFT, padx=4)
         tk.Label(opts, text="?", font=("微软雅黑", 9, "bold"), fg=TEXT2, bg=CARD,
                  cursor="hand2").pack(side=tk.RIGHT)
 
@@ -182,6 +184,7 @@ class Terminal:
         self.busy = True; self.cancel_flag = False
         self.prog.start(8); self._status("扫描中…", ACCENT)
         scanner.GROWTH_MODE = self.growth_var.get()
+        scanner.BOOM_MODE = self.boom_var.get()
         self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
         self.summary.insert(tk.END, "🔍 扫描 A 股…")
         self.summary.config(state=tk.DISABLED)
@@ -204,7 +207,7 @@ class Terminal:
             return
         cands_orig = self.last_scan.get("candidates_full") or []
         # 成长股模式：营收增长优先；价值模式：ROE优先
-        if self.growth_var.get():
+        if self.growth_var.get() or self.boom_var.get():
             cands = sorted(cands_orig, key=lambda x: x.get('rev_growth') or 0, reverse=True)
             mode_hint = "营收增长"
         else:
@@ -293,7 +296,7 @@ class Terminal:
             def chat(messages, temperature=0.4, max_tokens=2000):
                 return llm_client.chat(messages, temperature=temperature, max_tokens=max_tokens)
             report = investment_advice.generate_advice(
-                self.last_scan, self.growth_var.get(), chat,
+                self.last_scan, self.growth_var.get() or self.boom_var.get(), chat, boom_mode=self.boom_var.get(),
                 progress_callback=lambda m: self.q.put(("prog", m)))
             self.q.put(("advice_done", report))
         except Exception as e: self.q.put(("err", str(e)))
