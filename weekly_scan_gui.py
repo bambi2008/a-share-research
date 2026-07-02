@@ -5,8 +5,15 @@ A股投研助手 — 专业金融终端版
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
-import threading, queue
+import threading, queue, sys, os
 from datetime import datetime
+
+# ── frozen exe 路径修复 ──
+if getattr(sys, 'frozen', False):
+    _exe_dir = os.path.dirname(sys.executable)
+    if _exe_dir not in sys.path:
+        sys.path.insert(0, _exe_dir)
+
 import scanner, backtest, research, llm_client
 
 
@@ -76,9 +83,11 @@ class Terminal:
         self.view_scan_btn = self._btn(btns, "查看扫描结果", "#475569", self._view_scan, disabled=True)
         self.view_scan_btn.pack(fill=tk.X, pady=2)
         self._btn(btns, "港股监控", "#6366f1", self._show_hk).pack(fill=tk.X, pady=2)
-        self.advice_btn = self._btn(btns, "💰 投资建议", "#f59e0b", self._get_advice, disabled=True)
+        self.advice_btn = self._btn(btns, "投资建议", "#f59e0b", self._get_advice, disabled=True)
         self.advice_btn.pack(fill=tk.X, pady=2)
-        self._btn(btns, "📒 我的投资", "#ec4899", self._show_portfolio).pack(fill=tk.X, pady=2)
+        self.risk_btn = self._btn(btns, "三仓风控", "#10b981", self._show_risk, disabled=True)
+        self.risk_btn.pack(fill=tk.X, pady=2)
+        self._btn(btns, "我的投资", "#ec4899", self._show_portfolio).pack(fill=tk.X, pady=2)
 
         # 成长股开关
         opts = tk.Frame(left, bg=CARD)
@@ -159,7 +168,179 @@ class Terminal:
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.cur_tree = tree
 
+    def _show_report(self, text, accent_color=ACCENT):
+        """富文本报告面板 — 解析 markdown 风格文本，彩色分区显示"""
+        for w in self.right.winfo_children(): w.destroy()
+
+        # ── 外层容器: Canvas + Scrollbar ──
+        canvas = tk.Canvas(self.right, bg=CARD, highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(self.right, orient="vertical", command=canvas.yview)
+        inner = tk.Frame(canvas, bg=CARD)
+
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        _win_id = canvas.create_window((0, 0), window=inner, anchor="nw",
+                                        width=self.right.winfo_width()-22, tags=("inner",))
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # inner 宽度跟踪 canvas
+        def _on_canvas_resize(event):
+            try:
+                canvas.itemconfig("inner", width=event.width-4)
+            except Exception:
+                pass
+        canvas.bind("<Configure>", _on_canvas_resize, add="+")
+
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # 鼠标滚轮
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
+        # 清理绑定
+        def _unbind(_e):
+            canvas.unbind_all("<MouseWheel>")
+
+        rpad = {"padx": 18, "pady": (3, 0), "fill": tk.X}
+
+        # ── 逐行解析渲染 ──
+        lines = text.split("\n")
+        in_table = False
+        table_rows = []
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            # === 分隔线头 ===
+            if line.startswith("===") and len(line.strip("=")) <= 3:
+                # 吃掉连续的 === 行, 取中间文字为标题
+                j = i + 1
+                while j < len(lines) and lines[j].startswith("===") and len(lines[j].strip("=")) <= 3:
+                    j += 1
+                # i..j 之间的文字行是标题
+                title_lines = [l.strip() for l in lines[i:j] if not l.startswith("===") and l.strip()]
+                title = title_lines[0] if title_lines else ""
+                lbl = tk.Label(inner, text=title, font=("微软雅黑", 14, "bold"),
+                               fg=accent_color, bg=CARD, anchor="w")
+                lbl.pack(**rpad)
+                # 下划线
+                tk.Frame(inner, bg=accent_color, height=2).pack(fill=tk.X, padx=18, pady=(2, 8))
+                i = j
+                continue
+
+            # --- 分隔线
+            if line.startswith("---") and len(line.strip("-")) <= 3:
+                tk.Frame(inner, bg=BORDER, height=1).pack(fill=tk.X, padx=18, pady=(8, 4))
+                i += 1
+                continue
+
+            # Markdown table header: | col | col | ...
+            if line.startswith("|") and line.count("|") >= 3:
+                # 判断是否是表头分隔行 (|---|---|)
+                if all(c in "|-: " for c in line):
+                    i += 1
+                    continue
+                if not in_table:
+                    in_table = True
+                    table_rows = []
+                table_rows.append([c.strip() for c in line.split("|")[1:-1]])
+                i += 1
+                # 看一下下一行: 如果还是表格行继续，否则渲染
+                if i < len(lines) and lines[i].startswith("|") and lines[i].count("|") >= 3:
+                    continue
+                # 渲染表格
+                if table_rows:
+                    self._render_mini_table(inner, table_rows)
+                    table_rows = []
+                    in_table = False
+                continue
+
+            # = 分隔线(投资建议特有)
+            if line.startswith("====") or (line.startswith("==") and len(line.strip("=")) <= 3):
+                tk.Frame(inner, bg=BORDER, height=1).pack(fill=tk.X, padx=18, pady=6)
+                i += 1
+                continue
+
+            # ## 小标题
+            if line.startswith("## "):
+                section = line[3:].strip()
+                color = GREEN if "仓" in section or "候选" in section else TEAL
+                tk.Label(inner, text=section, font=("微软雅黑", 11, "bold"),
+                         fg=color, bg=CARD, anchor="w").pack(**rpad, pady=(10, 3))
+                i += 1
+                continue
+
+            # 【一、】中文标题
+            if line.strip().startswith("【"):
+                tk.Label(inner, text=line.strip(), font=("微软雅黑", 11, "bold"),
+                         fg=ACCENT, bg=CARD, anchor="w").pack(**rpad, pady=(12, 4))
+                i += 1
+                continue
+
+            # 说明/引用行
+            if line.strip().startswith("> ") or line.strip().startswith("说明:") or line.strip().startswith("*本"):
+                tk.Label(inner, text=line.strip(), font=("微软雅黑", 9),
+                         fg=TEXT2, bg=CARD, anchor="w", wraplength=700).pack(**rpad, pady=(2, 1))
+                i += 1
+                continue
+
+            # 空行
+            if not line.strip():
+                # 紧凑间距
+                i += 1
+                continue
+
+            # 普通文本 — 处理内联 +/-
+            self._render_rich_line(inner, line, rpad)
+            i += 1
+
+        self.cur_text = inner  # 标记
+
+    def _render_mini_table(self, parent, rows):
+        """在 frame 内渲染小型表格（label 模拟）"""
+        if not rows:
+            return
+        tbl = tk.Frame(parent, bg=CARD)
+        tbl.pack(fill=tk.X, padx=18, pady=(4, 8))
+
+        ncols = max(len(r) for r in rows)
+        # 列宽估算
+        col_widths = [12] * ncols
+        for r in rows:
+            for ci, cell in enumerate(r[:ncols]):
+                col_widths[ci] = max(col_widths[ci], min(len(cell)*2 + 4, 22))
+
+        for ri, row in enumerate(rows):
+            bg_row = CARD2 if ri == 0 else (CARD if ri % 2 == 0 else "#1e2130")
+            fg_row = TEXT if ri == 0 else TEXT2
+            ft_row = ("微软雅黑", 9, "bold") if ri == 0 else ("Consolas", 9)
+            for ci, cell in enumerate(row[:ncols]):
+                # 颜色
+                fg = fg_row
+                if "+" in cell and "%" in cell: fg = GREEN
+                elif "-" in cell and "%" in cell: fg = RED
+                lbl = tk.Label(tbl, text=cell, font=ft_row, fg=fg, bg=bg_row,
+                               anchor="center", width=col_widths[ci])
+                lbl.grid(row=ri, column=ci, sticky="ew", padx=1, pady=1)
+            for ci in range(len(row), ncols):
+                tk.Label(tbl, text="", bg=bg_row).grid(row=ri, column=ci, sticky="ew")
+
+    def _render_rich_line(self, parent, line, rpad):
+        """渲染单行文本，数词着色"""
+        fg = TEXT2
+        ft = ("微软雅黑", 10)
+        txt = line.strip()
+        if not txt:
+            return
+        # · 开头的条目
+        if txt.startswith("· ") or txt.startswith("- "):
+            fg = TEXT
+        # 包含正向/负向数据
+        tk.Label(parent, text=txt, font=ft, fg=fg, bg=CARD, anchor="w",
+                 wraplength=720).pack(**rpad, pady=(1, 2))
+
     def _show_text(self, text, font=("微软雅黑", 10)):
+        """简单文本（错误信息等）"""
         for w in self.right.winfo_children(): w.destroy()
         st = tk.Text(self.right, font=font, bg=CARD, fg=TEXT, relief="flat", bd=0,
                      padx=16, pady=12, wrap=tk.WORD)
@@ -186,7 +367,7 @@ class Terminal:
         scanner.GROWTH_MODE = self.growth_var.get()
         scanner.BOOM_MODE = self.boom_var.get()
         self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
-        self.summary.insert(tk.END, "🔍 扫描 A 股…")
+        self.summary.insert(tk.END, "扫描 A 股...")
         self.summary.config(state=tk.DISABLED)
         threading.Thread(target=self._scan_worker, daemon=True).start()
 
@@ -282,6 +463,26 @@ class Terminal:
     def _backtest(self):
         self._status("回测功能请通过命令行使用 python backtest.py", TEXT2)
 
+    def _show_risk(self):
+        """三仓风控: 敞口面板 + 动量排名 + 卫星凸性候选。"""
+        if self.busy or not self.last_scan: return
+        self.busy = True; self.prog.start(8); self._status("生成三仓风控…", "#10b981")
+        self._show_welcome()
+        threading.Thread(target=self._risk_worker, daemon=True).start()
+
+    def _risk_worker(self):
+        try:
+            import enrich_report, portfolio
+            cands = self.last_scan.get("candidates_full") or []
+            pm = {c["code"]: c["price"] for c in cands if c.get("price")}
+            # 维护移动止损基准
+            try: portfolio.update_highs(pm)
+            except Exception: pass
+            text = enrich_report.build_extension(cands, pm)
+            self.q.put(("risk_done", text))
+        except Exception as e:
+            self.q.put(("err", str(e)))
+
     def _get_advice(self):
         if self.busy or not self.last_scan: return
         if not llm_client.is_configured():
@@ -292,11 +493,16 @@ class Terminal:
 
     def _advice_worker(self):
         try:
-            import investment_advice
+            import investment_advice, portfolio
             def chat(messages, temperature=0.4, max_tokens=2000):
                 return llm_client.chat(messages, temperature=temperature, max_tokens=max_tokens)
+            # 用扫描到的现价估算账户总资产，供硬规则把仓位上限换算成可买金额
+            pm = {c["code"]: c["price"] for c in (self.last_scan.get("candidates_full") or [])
+                  if c.get("price")}
+            equity = portfolio.total_equity(pm)
             report = investment_advice.generate_advice(
-                self.last_scan, self.growth_var.get() or self.boom_var.get(), chat, boom_mode=self.boom_var.get(),
+                self.last_scan, self.growth_var.get() or self.boom_var.get(), chat,
+                boom_mode=self.boom_var.get(), equity=equity,
                 progress_callback=lambda m: self.q.put(("prog", m)))
             self.q.put(("advice_done", report))
         except Exception as e: self.q.put(("err", str(e)))
@@ -310,14 +516,21 @@ class Terminal:
 
     def _show_portfolio(self):
         """显示投资记录本"""
-        import portfolio
+        try:
+            import portfolio
+        except ImportError as e:
+            messagebox.showerror("错误", f"投资模块加载失败: {e}")
+            return
         data = portfolio.load()
         # 用扫描结果里的价格（如果有的话）
         pm = {}
+        name_map = {}
         if self.last_scan:
             for c in self.last_scan.get("candidates_full") or []:
                 if c.get("price"):
                     pm[c["code"]] = c["price"]
+                if c.get("name"):
+                    name_map[c["code"]] = c["name"]
         status = portfolio.get_portfolio_status(pm)
 
         # 构建表格
@@ -337,9 +550,9 @@ class Terminal:
         self._show_table(cols, rows, height=14)
         total = status["total_value"]
         self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
-        self.summary.insert(tk.END, f"💰 总资产: {total:,.0f}  现金: {data['cash']:,.0f}")
+        self.summary.insert(tk.END, f"总资产: {total:,.0f}  现金: {data['cash']:,.0f}")
         self.summary.config(state=tk.DISABLED)
-        self._status(f"📒 投资记录 | 总资产 {total:,.0f} | 现金 {data['cash']:,.0f}", TEXT)
+        self._status(f"投资记录 | 总资产 {total:,.0f} | 现金 {data['cash']:,.0f}", TEXT)
 
         # 弹出操作对话框
         dlg = tk.Toplevel(self.root); dlg.title("记录交易"); dlg.geometry("340x300")
@@ -362,13 +575,8 @@ class Terminal:
             try:
                 code=code_var.get().strip(); price=float(price_var.get()); shares=int(shares_var.get())
                 d=date_var.get().strip() or None
-                import akshare as ak
-                df=ak.stock_zh_a_spot()
-                nm=""; pm2={}
-                for _,r in df.iterrows():
-                    c=str(r['代码']).replace('bj','').replace('sh','').replace('sz','')
-                    if c==code: nm=str(r['名称']); break
-                t=portfolio.buy(code, nm or code, price, shares, d)
+                nm = name_map.get(code, code)
+                t=portfolio.buy(code, nm, price, shares, d)
                 messagebox.showinfo("买入成功", f"{code} {nm} {shares}股 @ {price}")
                 dlg.destroy(); self._show_portfolio()
             except Exception as e: messagebox.showerror("错误", str(e))
@@ -424,19 +632,20 @@ class Terminal:
                 k, m = self.q.get_nowait()
                 if k == "prog": self._status(m[:36], ACCENT)
                 elif k == "scan_done":
-                    self.busy = False; self.prog.stop(); self._status(f"✅ {m['candidate_count']}只候选", GREEN)
+                    self.busy = False; self.prog.stop(); self._status(f"{m['candidate_count']}只候选", GREEN)
                     self.last_scan = m
                     # 启用分析按钮 + 查看扫描结果
                     self.research_btn.config(state=tk.NORMAL)
                     self.ind_report_btn.config(state=tk.NORMAL)
                     self.view_scan_btn.config(state=tk.DISABLED)
                     self.advice_btn.config(state=tk.NORMAL)
+                    self.risk_btn.config(state=tk.NORMAL)
                     # 摘要
                     self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
                     cands = m.get("candidates_full") or []
                     s = f"PE 3-40 | ROE>5% | 市值50-10000亿\n{m['candidate_count']}只候选 | {m['industry_count']}行业 | {m['total_stocks']}只覆盖"
                     conc = m.get("concentration", 0)
-                    if conc >= 30: s += f"\n⚠️ 集中度 {m.get('top_industry','')} {conc:.0f}%"
+                    if conc >= 30: s += f"\n[!] 集中度 {m.get('top_industry','')} {conc:.0f}%"
                     # 数据源指示
                     ds = m.get("data_sources", {})
                     if ds:
@@ -458,22 +667,27 @@ class Terminal:
                             rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), rev, prof))
                         self._show_table(cols, rows, height=22)
                 elif k == "research_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 深度分析完成", PURPLE)
+                    self.busy = False; self.prog.stop(); self._status("深度分析完成", PURPLE)
                     self.research_btn.config(state=tk.NORMAL)
                     self.view_scan_btn.config(state=tk.NORMAL)
-                    self._show_text(m, ("微软雅黑", 10))
+                    self._show_report(m, PURPLE)
                 elif k == "industry_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 产业研报完成", TEAL)
+                    self.busy = False; self.prog.stop(); self._status("产业研报完成", TEAL)
                     self.ind_report_btn.config(state=tk.NORMAL)
                     self.view_scan_btn.config(state=tk.NORMAL)
-                    self._show_text(m, ("微软雅黑", 10))
+                    self._show_report(m, TEAL)
                 elif k == "advice_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 投资建议已生成", "#f59e0b")
+                    self.busy = False; self.prog.stop(); self._status("投资建议已生成", "#f59e0b")
                     self.advice_btn.config(state=tk.NORMAL)
                     self.view_scan_btn.config(state=tk.NORMAL)
-                    self._show_text(m, ("微软雅黑", 10))
+                    self._show_report(m, "#f59e0b")
+                elif k == "risk_done":
+                    self.busy = False; self.prog.stop(); self._status("三仓风控已生成", "#10b981")
+                    self.risk_btn.config(state=tk.NORMAL)
+                    self.view_scan_btn.config(state=tk.NORMAL)
+                    self._show_report(m, "#10b981")
                 elif k == "hk_done":
-                    self.busy = False; self.prog.stop(); self._status("✅ 港股数据已更新", "#6366f1")
+                    self.busy = False; self.prog.stop(); self._status("港股数据已更新", "#6366f1")
                     cols = ("代码","名称","行业","最新价","涨跌幅")
                     rows = []
                     for r in m:
@@ -485,8 +699,8 @@ class Terminal:
                 elif k == "cancelled":
                     self.busy = False; self.prog.stop(); self._status("已取消", TEXT2)
                 elif k == "err":
-                    self.busy = False; self.prog.stop(); self._status(f"❌ {m[:30]}", RED)
-                    self._show_text(f"😞 出错了\n\n{m}\n\n常见原因: 网络太慢 / API限流 → 重试一次")
+                    self.busy = False; self.prog.stop(); self._status(f"错误: {m[:30]}", RED)
+                    self._show_text(f"出错了\n\n{m}\n\n常见原因: 网络太慢 / API限流 -> 重试一次")
         except queue.Empty: pass
         self.root.after(200, self._poll)
 

@@ -77,20 +77,41 @@ def build_satellite_section(candidates, satellite_mod=None, top_n=5):
 
 def build_risk_section(price_map, position_mod=None, config_mod=None,
                        panel_mod=None):
-    if position_mod is None:
-        import position as position_mod
+    """持仓来源优先用 GUI 的 portfolio 模块; 若不可用再退回 position 模块。
+
+    portfolio.to_risk_positions()/total_equity() 与 position 的同名接口签名一致,
+    因此二者可互换。
+    """
     if config_mod is None:
         import portfolio_config as config_mod
     if panel_mod is None:
         import report_panel as panel_mod
 
-    # 维护移动止损基准(现价创新高则抬 high)
-    try:
-        position_mod.update_highs(price_map)
-    except Exception:
-        pass
-    positions = position_mod.to_positions(price_map)
-    equity = position_mod.total_equity(price_map)
+    positions, equity = None, None
+    if position_mod is not None:
+        # 显式注入(测试用)
+        try: position_mod.update_highs(price_map)
+        except Exception: pass
+        positions = position_mod.to_risk_positions(price_map) \
+            if hasattr(position_mod, "to_risk_positions") \
+            else position_mod.to_positions(price_map)
+        equity = position_mod.total_equity(price_map)
+    else:
+        # 默认: 先试 portfolio(GUI 用), 再退 position
+        for mod_name, pos_fn in (("portfolio", "to_risk_positions"),
+                                 ("position", "to_positions")):
+            try:
+                mod = __import__(mod_name)
+                try: mod.update_highs(price_map)
+                except Exception: pass
+                positions = getattr(mod, pos_fn)(price_map)
+                equity = mod.total_equity(price_map)
+                break
+            except Exception:
+                continue
+
+    if positions is None:
+        positions, equity = [], 0
     buckets = config_mod.load()
     return panel_mod.build_risk_panel(positions, equity, buckets)
 

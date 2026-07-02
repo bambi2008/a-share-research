@@ -1,78 +1,137 @@
 #!/usr/bin/env python3
 """
-投资建议模块 — 基于扫描结果 + LLM 研判，输出具体买卖建议
+投资建议模块 v2 — 硬规则(仓位/止损) + LLM(仅定性)
+====================================================
+相比 v1 的关键改变:
+  - 仓位%、止损价 由 risk_engine/portfolio_config 的三仓规则计算(可复现、可验证),
+    不再让 LLM 凭空报点位。
+  - LLM 只负责"定性": 推荐逻辑、催化剂、风险因素、回避理由、操作节点。
+  - 删除 v1 让 LLM 编造的"6月预测XX元/12-18月触及XX元"——语言模型无预测效力,
+    报点位等于话术, 会误导下注。
+  - 明确标注: AI 定性参考, 非投资建议。
 """
 from datetime import datetime
 
 
-def build_advice_prompt(candidates, growth_mode=False, scan_summary=""):
-    """构造投资建议 prompt"""
-    lines = [
-        "你是一名资深 A 股投资顾问，客户是个人投资者（验证仓资金 5-10 万）。",
-        "请基于以下候选池，给出具体的投资建议。",
-        "",
-        f"## 候选池概览",
-        f"模式: {'成长股(营收增长优先)' if growth_mode else '价值股(ROE优先)'}",
-        f"候选数: {len(candidates)} 只",
-        f"{scan_summary}",
-        "",
-        "## 候选公司数据 (前15只)",
-        "| 代码 | 名称 | PE | ROE% | 扣非ROE% | 价格 | 市值(亿) | 行业 | 营收增% | 利润增% |",
-        "|------|------|-----|------|---------|------|---------|------|---------|---------|",
-    ]
+def _bucket_of(candidate, growth_mode, boom_mode):
+    """按候选特征归入三仓（与 satellite/momentum 口径一致的粗判）。"""
+    if boom_mode:
+        return "satellite"
+    rev = candidate.get("rev_growth") or 0
+    mv = candidate.get("mktcap") or 0
+    # 高增速中小盘 → 动量弹性; 其余 → 压舱
+    if growth_mode and rev >= 30 and 30 <= mv <= 300:
+        return "momentum"
+    return "anchor"
 
+
+def compute_rule_based_plan(candidates, growth_mode=False, boom_mode=False,
+                            equity=None, buckets_cfg=None, top_n=8):
+    """用硬规则算出每只候选的: 仓位上限% / 止损价 / 止损距离。
+
+    返回 [{code,name,bucket,price,per_name_cap_pct,max_buy_amount,
+           stop_price,stop_pct,note}, ...]
+    """
+    try:
+        import portfolio_config
+        buckets_cfg = buckets_cfg or portfolio_config.load()
+    except Exception:
+        # 兜底默认（与 portfolio_config.DEFAULT_BUCKETS 对齐）
+        buckets_cfg = {
+            "anchor":    {"name": "压舱仓", "per_name_max": 0.10, "stop": None,  "trailing": False},
+            "momentum":  {"name": "动量弹性仓", "per_name_max": 0.07, "stop": -0.10, "trailing": True},
+            "satellite": {"name": "高凸卫星仓", "per_name_max": 0.03, "stop": None,  "trailing": False},
+        }
+
+    plans = []
+    for c in candidates[:top_n]:
+        bucket = _bucket_of(c, growth_mode, boom_mode)
+        cfg = buckets_cfg.get(bucket, {})
+        price = c.get("price")
+        cap_pct = cfg.get("per_name_max", 0.05)
+        plan = {
+            "code": c.get("code", ""), "name": c.get("name", ""),
+            "bucket": bucket, "bucket_name": cfg.get("name", bucket),
+            "price": price,
+            "per_name_cap_pct": cap_pct * 100,
+            "max_buy_amount": (equity * cap_pct) if equity else None,
+            "stop_price": None, "stop_pct": None,
+            "note": "",
+        }
+        stop = cfg.get("stop")
+        if stop is not None and price:
+            # 建仓时移动止损基准=现价, 故止损价 = 现价×(1+stop)
+            plan["stop_price"] = price * (1 + stop)
+            plan["stop_pct"] = abs(stop) * 100
+        if bucket == "satellite":
+            plan["note"] = "投机仓·可归零的钱·不设机械止损靠限仓控制"
+        plans.append(plan)
+    return plans
+
+
+def build_qualitative_prompt(candidates, plans, growth_mode=False, scan_summary=""):
+    """LLM 只做定性: 推荐逻辑/催化剂/风险/回避。不让它报任何价格点位。"""
+    lines = [
+        "你是一名严谨的 A 股研究员。下面给你候选池数据，以及系统已按风控规则算好的仓位与止损。",
+        "你的任务【仅限定性分析】——绝对不要给出任何买入价、目标价、止盈价或未来价格预测。",
+        "价格与仓位由系统规则负责，你只负责判断逻辑、催化剂与风险。",
+        "",
+        f"模式: {'成长股(营收增长优先)' if growth_mode else '价值股(ROE优先)'} | {scan_summary}",
+        "",
+        "## 候选数据",
+        "| 代码 | 名称 | PE | ROE% | 扣非ROE% | 市值(亿) | 行业 | 营收增% | 利润增% |",
+        "|------|------|-----|------|---------|---------|------|---------|---------|",
+    ]
     for c in candidates[:15]:
         pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
         roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
         droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
-        price = f"{c.get('price',0):.2f}" if c.get('price') else "-"
         mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
         rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
         prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
-        lines.append(f"| {c.get('code','')} | {c.get('name','')} | {pe} | {roe} | {droe} | {price} | {mv} | {c.get('industry','')} | {rev} | {prof} |")
+        lines.append(f"| {c.get('code','')} | {c.get('name','')} | {pe} | {roe} | {droe} | {mv} | {c.get('industry','')} | {rev} | {prof} |")
 
     lines.extend([
         "",
-        "## 分析要求",
+        "## 输出要求（纯文本，【一、】做大标题，· 做条目）",
         "",
-        "请输出以下结构化的投资建议（务实、具体、可执行）：",
-        "格式: 纯文本不用markdown。用【一、】做大标题，· 做条目，→连接因果。每只股票一行。",
+        "【一、板块判断】当前该板块整体处境（积极/谨慎/观望）+ 一句话逻辑",
         "",
-        "**一、核心判断**: 当前市场环境下该板块的整体策略（积极/谨慎/观望），一句话逻辑",
+        "【二、候选点评】对前几只逐一给出（不涉及价格）:",
+        "  · 代码 名称 → 推荐/中性/回避 → 一句话逻辑(结合ROE/增速/扣非差异) → 关键催化剂 → 主要风险",
         "",
-        "**二、推荐买入（3-5只）**: 每只严格按以下模板输出（必须包含所有字段）:",
+        "【三、需要警惕的】扣非ROE远低于ROE、疑似周期顶部、ST 等问题标的，点名并说明原因",
         "",
-        "  .代码 名称 | 仓位:X% | 买入:XX-XX元 | 止损:XX元 | 止盈:XX元 |",
-        "    推荐逻辑: (一句话结合数据)",
-        "    6月预测: 乐观情景可达 XX元 (理由: 基于行业景气/增速/催化剂)",
-        "    12-18月预测: 产业趋势下最高可触及 XX元 (理由: 基于TAM/渗透率/技术突破)",
-        "    风险标注: (有周期顶部风险则标注,否则写无)",
+        "【四、观察节点】未来1-3个月值得跟踪的事件（财报/政策/行业催化）",
         "",
-        "卫星仓: 止盈价至少为买入上限的1.4倍(40%+空间)。6月/12-18月预测必须给具体数字和理由。",
-        "**三、建议回避**: 1-2只候选池里看起来好但实际有问题的（如周期顶部、扣非ROE远低于ROE、ST股）",
+        "【五、核心风险】最重要的 2-3 个下行风险",
         "",
-        "**四、仓位分配**: 总资金5-10万，每只不超过20%，保留现金比例",
-        "",
-        "**五、操作日历**: 未来1-3个月的关键观察节点（如Q2财报披露、政策窗口、行业催化剂）",
-        "",
-        "**六、风险提示**: 最核心的2-3个下行风险",
-        "",
-        "注意:",
-        "- 价格区间要合理，基于当前价格给5-15%的浮动范围",
-        "- 必须区分成长股和价值股，给出不同的买卖逻辑",
-        "- 如果候选池中某公司扣非ROE为'-'或远低于ROE，必须指出",
-        "- 不要推荐ST股",
-        "- 仓位分配要加起来=100%",
+        "再次强调: 不要输出任何价格数字、目标价、止盈止损价——那些系统已按规则算好。",
     ])
     return "\n".join(lines)
 
 
-def generate_advice(scan_result, growth_mode, llm_chat_fn, progress_callback=None):
-    """
-    生成投资建议。
-    scan_result: scanner.run_scan 的返回值
-    growth_mode: 是否成长股模式
-    llm_chat_fn: messages → response 的 LLM 调用函数
+def _fmt_plan_table(plans):
+    """把硬规则计划渲染成表格文本（这些是可复现的真数字）。"""
+    r = ["【系统风控计划（规则计算，非预测）】",
+         "代码     仓位归属   单票上限   参考现价   移动止损价   止损幅度   可买上限"]
+    for p in plans:
+        price = f"{p['price']:.2f}" if p.get("price") else "-"
+        stop = f"{p['stop_price']:.2f}" if p.get("stop_price") else "—(靠限仓)"
+        stop_pct = f"-{p['stop_pct']:.0f}%" if p.get("stop_pct") else "—"
+        cap_amt = f"{p['max_buy_amount']:,.0f}元" if p.get("max_buy_amount") else f"{p['per_name_cap_pct']:.0f}%"
+        r.append(f"{p['code']:<8} {p['bucket_name']:<8} "
+                 f"{p['per_name_cap_pct']:.0f}%{'':<6} {price:<9} {stop:<11} {stop_pct:<8} {cap_amt}")
+        if p.get("note"):
+            r.append(f"         ⚠️ {p['note']}")
+    return "\n".join(r)
+
+
+def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
+                    progress_callback=None, equity=None):
+    """生成投资建议: 硬规则计划 + LLM 定性分析。
+
+    equity: 账户总资产（用于把仓位上限换算成可买金额）。GUI 传 portfolio.total_equity()。
     """
     def log(m):
         if progress_callback: progress_callback(m)
@@ -81,25 +140,37 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, progress_callback=Non
     if not cands:
         return "⚠️ 无候选数据，请先扫描"
 
+    # 成长/爆发模式按营收增速排序，价值模式保持 ROE 序
+    if growth_mode or boom_mode:
+        cands = sorted(cands, key=lambda x: x.get('rev_growth') or 0, reverse=True)
+
     summary = f"覆盖{scan_result.get('industry_count',0)}行业, {scan_result.get('total_stocks',0)}只股票"
 
-    log("生成投资建议...")
-    prompt = build_advice_prompt(cands, growth_mode, summary)
+    log("计算风控计划...")
+    plans = compute_rule_based_plan(cands, growth_mode, boom_mode, equity=equity)
 
-    analysis = llm_chat_fn([
-        {"role": "user", "content": prompt}
-    ], temperature=0.4, max_tokens=2000)
+    log("生成定性分析...")
+    prompt = build_qualitative_prompt(cands, plans, growth_mode, summary)
+    try:
+        analysis = llm_chat_fn([{"role": "user", "content": prompt}],
+                               temperature=0.4, max_tokens=2000)
+    except Exception as e:
+        analysis = f"(定性分析生成失败: {e})"
 
-    # 组装报告
     report = []
     report.append("=" * 64)
-    report.append("  💰 投资建议 — AI 投资顾问研判")
+    report.append("  🎯 投资建议 — 风控硬规则 + AI 定性分析")
     report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
-    report.append(f"  模式: {'成长股' if growth_mode else '价值股'}")
+    report.append(f"  模式: {'爆发/卫星' if boom_mode else ('成长股' if growth_mode else '价值股')}")
     report.append("=" * 64)
     report.append("")
+    report.append(_fmt_plan_table(plans))
+    report.append("")
+    report.append("-" * 64)
     report.append(analysis)
-    report.append(f"\n\n---")
-    report.append("*本建议由 AI 基于公开数据生成，仅供研究参考，不构成投资建议。*")
-    report.append("*建议用小资金验证，逐步调整策略。*")
+    report.append("")
+    report.append("-" * 64)
+    report.append("说明: 仓位/止损为系统按三仓规则计算的纪律约束(可复现)；")
+    report.append("定性分析由 AI 生成，仅供研究参考，均不构成投资建议。买卖由你自行决策。")
+    report.append("卫星仓请只用可承受归零的资金。")
     return "\n".join(report)
