@@ -35,11 +35,14 @@ def search_news(queries, max_results=3):
 
 def build_research_prompt(candidates, industries, search_results, scan_summary):
     """构造产业研报 prompt"""
+    from datetime import datetime
     sep = "="*50
     lines = [
         "你是一名资深产业研究员。基于以下扫描结果和最新公开信息，",
+        f"今天是 {datetime.now().strftime('%Y年%m月%d日')}，财务数据来自最新季报。",
         "对候选池涉及的行业做 6-12 个月产业前景研判，",
         "**特别关注外需依赖度和地缘政治风险**。",
+        "注意：不要写'根据2025年Q1数据'这种话——数据就是最新的。说'最新财报'即可。",
         "",
         sep,
         "## 扫描概况",
@@ -123,10 +126,15 @@ def generate_research_report(scan_result, llm_chat_fn, progress_callback=None):
     ], temperature=0.5, max_tokens=2500)
 
     # 组装报告
+    from scanner import _report_quarter_dates
+    q, _, _ = _report_quarter_dates()
+    q_map = {"0331": "Q1", "0630": "Q2", "0930": "Q3", "1231": "Q4"}
+    data_period = f"{q[:4]}年{q_map.get(q[4:], q[:4])}"
+
     report = []
     report.append("=" * 64)
     report.append("  产业深度研报 — AI产业链+内外需分析")
-    report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 财报截止: {data_period}")
     report.append("=" * 64)
     report.append(f"\n扫描基础: {summary}")
     report.append("\n---\n")

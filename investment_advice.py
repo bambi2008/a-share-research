@@ -69,12 +69,19 @@ def compute_rule_based_plan(candidates, growth_mode=False, boom_mode=False,
     return plans
 
 
-def build_qualitative_prompt(candidates, plans, growth_mode=False, scan_summary=""):
+def build_qualitative_prompt(candidates, plans, growth_mode=False, scan_summary="", data_period="2026年Q1"):
     """LLM 只做定性: 推荐逻辑/催化剂/风险/回避。不让它报任何价格点位。"""
+    from datetime import datetime
+    today = datetime.now().strftime('%Y年%m月%d日')
     lines = [
         "你是一名严谨的 A 股研究员。下面给你候选池数据，以及系统已按风控规则算好的仓位与止损。",
+        f"今天是 {today}，财务数据截止 {data_period}（最新一期季报）。",
         "你的任务【仅限定性分析】——绝对不要给出任何买入价、目标价、止盈价或未来价格预测。",
         "价格与仓位由系统规则负责，你只负责判断逻辑、催化剂与风险。",
+        "",
+        "【重要】营收增%、利润增% 是同比数据（今年vs去年同期），不是你看到'去年同期'就以为数据是旧的。",
+        "你分析的是最新财报，基于当前时点做研判，不要写'根据2025年数据'这种话——数据就是最新的。",
+        "你引用时只说'最新财报显示'或'Q1表现'即可，不要提具体年份季度。",
         "",
         f"模式: {'成长股(营收增长优先)' if growth_mode else '价值股(ROE优先)'} | {scan_summary}",
         "",
@@ -149,8 +156,15 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
     log("计算风控计划...")
     plans = compute_rule_based_plan(cands, growth_mode, boom_mode, equity=equity)
 
+    # 计算数据截止期
+    from scanner import _report_quarter_dates
+    q, _, _ = _report_quarter_dates()
+    q_map = {"0331": "Q1", "0630": "Q2", "0930": "Q3", "1231": "Q4"}
+    q_label = q_map.get(q[4:], q[:4])
+    data_period = f"{q[:4]}年{q_label}"
+
     log("生成定性分析...")
-    prompt = build_qualitative_prompt(cands, plans, growth_mode, summary)
+    prompt = build_qualitative_prompt(cands, plans, growth_mode, summary, data_period)
     try:
         analysis = llm_chat_fn([{"role": "user", "content": prompt}],
                                temperature=0.4, max_tokens=2000)
@@ -159,8 +173,8 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
 
     report = []
     report.append("=" * 64)
-    report.append("  🎯 投资建议 — 风控硬规则 + AI 定性分析")
-    report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    report.append("  投资建议 — 风控硬规则 + AI 定性分析")
+    report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 财报截止: {data_period}")
     report.append(f"  模式: {'爆发/卫星' if boom_mode else ('成长股' if growth_mode else '价值股')}")
     report.append("=" * 64)
     report.append("")
