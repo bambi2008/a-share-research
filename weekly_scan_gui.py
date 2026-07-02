@@ -388,7 +388,7 @@ class Terminal:
         cands = m.get("candidates_full") or []
         if not cands: return
         self.view_scan_btn.config(state=tk.DISABLED)
-        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","营收增%","利润增%")
+        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","营收增%","利润增%")
         rows = []
         for c in cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -398,7 +398,8 @@ class Terminal:
             mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
             rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
             prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
-            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), rev, prof))
+            concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, rev, prof))
         self._show_table(cols, rows, height=22)
 
     def _hk_worker(self):
@@ -603,7 +604,7 @@ class Terminal:
                     self.summary.config(state=tk.DISABLED)
                     # 表格
                     if cands:
-                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","营收增%","利润增%")
+                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","营收增%","利润增%")
                         rows = []
                         for c in cands[:40]:
                             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -613,7 +614,8 @@ class Terminal:
                             mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
                             rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
                             prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
-                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), rev, prof))
+                            concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
+                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, rev, prof))
                         self._show_table(cols, rows, height=22)
                 elif k == "research_done":
                     self.busy = False; self.prog.stop(); self._status("深度分析完成", PURPLE)

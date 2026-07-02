@@ -285,12 +285,31 @@ def run_scan(progress_callback=None, cancel_check=None):
     # ── 3. 实时价格（多源容灾） ──
     log("3/5 实时行情...")
     check_cancel()
+
+    # ── 2.5 热门概念板块 ──
+    log("2.5 热门概念...")
+    check_cancel()
+    concept_codes_all = set()
+    code_concepts = {}
+    try:
+        import concept_stocks
+        concept_stocks_all, code_concepts = concept_stocks.get_concept_codes(
+            progress_callback=lambda m: log(f"  {m}"))
+        concept_codes_all = concept_stocks_all
+        log(f"  概念股: {len(concept_codes_all)} 只 (6个概念板块)")
+    except Exception as e:
+        log(f"  概念板块跳过: {e}")
+
     import data_source as ds
-    # 目标股票池：目标行业全部代码，传给备用源以精准覆盖中小盘（而非只覆盖大盘）
+    # 目标股票池：目标行业 + 概念成分股
     target_codes = [
         str(r['股票代码']) for _, r in df_latest.iterrows()
         if str(r.get('所处行业', '')) in TARGET_INDUSTRIES
     ]
+    # 合并概念股代码
+    for cc in concept_codes_all:
+        if cc not in target_codes:
+            target_codes.append(cc)
     price_map, price_src = ds.get_price_map(FETCH_TIMEOUT, codes=target_codes)
     log(f" 价格覆盖: {len(price_map)} 只 (源: {price_src})")
 
@@ -301,8 +320,12 @@ def run_scan(progress_callback=None, cancel_check=None):
     industry_stats = {}
 
     for _, row in df_latest.iterrows():
+        code = str(row['股票代码'])
         industry = str(row.get('所处行业', ''))
-        if industry == 'nan' or industry not in TARGET_INDUSTRIES:
+
+        # 概念股：即使行业不匹配也保留（前提是代码在概念成分中）
+        is_concept = code in concept_codes_all
+        if industry == 'nan' or (industry not in TARGET_INDUSTRIES and not is_concept):
             continue
         industry_stats[industry] = industry_stats.get(industry, 0) + 1
 
@@ -341,12 +364,16 @@ def run_scan(progress_callback=None, cancel_check=None):
 
         profit_g = row.get('净利润-同比增长')
 
+        # 概念标签
+        concepts = code_concepts.get(code, [])
+
         candidates.append({
             'code': code, 'name': str(row['股票简称']),
             'pe': pe, 'roe': roe, 'price': price,
             'industry': industry,
             'rev_growth': rev_g if not pd.isna(rev_g) else None,
             'profit_growth': profit_g if not pd.isna(profit_g) else None,
+            'concepts': concepts,
         })
 
     if BOOM_MODE:
