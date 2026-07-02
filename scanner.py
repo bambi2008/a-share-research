@@ -76,11 +76,7 @@ BOOM_SECTORS = [         # 只在这些爆发行业里找(基于产业研判)
 ]
 
 
-INDICES = [
-    ("上证指数", "sh000001"),
-    ("创业板指", "sz399006"),
-    ("科创50", "sh000688"),
-]
+from data_source import INDICES  # 指数列表已内聚到 data_source（含 baostock 备用 code）
 
 
 class ScanCancelled(Exception):
@@ -290,8 +286,13 @@ def run_scan(progress_callback=None, cancel_check=None):
     log("3/5 实时行情...")
     check_cancel()
     import data_source as ds
-    price_map, price_src = ds.get_price_map(FETCH_TIMEOUT)
-    log(f"  价格覆盖: {len(price_map)} 只 (源: {price_src})")
+    # 目标股票池：目标行业全部代码，传给备用源以精准覆盖中小盘（而非只覆盖大盘）
+    target_codes = [
+        str(r['股票代码']) for _, r in df_latest.iterrows()
+        if str(r.get('所处行业', '')) in TARGET_INDUSTRIES
+    ]
+    price_map, price_src = ds.get_price_map(FETCH_TIMEOUT, codes=target_codes)
+    log(f" 价格覆盖: {len(price_map)} 只 (源: {price_src})")
 
     # ── 4. 筛选 ──
     log("4/5 筛选...")
@@ -412,7 +413,13 @@ def run_scan(progress_callback=None, cancel_check=None):
     log("5/5 生成报告...")
     report = _build_report(index_data, industry_stats, candidates, cand_industry,
                            top_industry, concentration, ttm_available, q_latest, positions)
-
+    # ── 扩展: 动量排名 + 卫星凸性 + 三仓风控面板(失败不影响主报告) ──
+    try:
+        import enrich_report
+        report += "\n\n" + enrich_report.build_extension(candidates, price_map)
+    except Exception as _e:
+        log(f" ⚠️ 扩展模块跳过: {_e}")
+    
     # 保存
     now = datetime.now()
     week_num = now.isocalendar()[1]
