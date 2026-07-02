@@ -42,7 +42,7 @@ def build_research_prompt(candidates, industries, search_results, scan_summary):
         f"今天是 {datetime.now().strftime('%Y年%m月%d日')}，财务数据来自最新季报。",
         "对候选池涉及的行业做 6-12 个月产业前景研判，",
         "**特别关注外需依赖度和地缘政治风险**。",
-        "注意：不要写'根据2025年Q1数据'这种话——数据就是最新的。说'最新财报'即可。",
+        "注意：不要提任何过去的年份(2024/2025)。说'最新财报'即可。",
         "",
         sep,
         "## 扫描概况",

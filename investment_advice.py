@@ -79,24 +79,25 @@ def build_qualitative_prompt(candidates, plans, growth_mode=False, scan_summary=
         "你的任务【仅限定性分析】——绝对不要给出任何买入价、目标价、止盈价或未来价格预测。",
         "价格与仓位由系统规则负责，你只负责判断逻辑、催化剂与风险。",
         "",
-        "【重要】营收增%、利润增% 是同比数据（今年vs去年同期），不是你看到'去年同期'就以为数据是旧的。",
-        "你分析的是最新财报，基于当前时点做研判，不要写'根据2025年数据'这种话——数据就是最新的。",
-        "你引用时只说'最新财报显示'或'Q1表现'即可，不要提具体年份季度。",
+        "【重要】营收增%、利润增% 是同比数据。你分析的是最新财报(Q1 2026)，",
+        "不要提任何过去的年份(2024/2025)，不要说'根据2024年/2025年数据'。",
+        "只说'最新财报显示'、'Q1表现'即可。绝对不要输出包含2024或2025年份的句子。",
         "",
         f"模式: {'成长股(营收增长优先)' if growth_mode else '价值股(ROE优先)'} | {scan_summary}",
         "",
         "## 候选数据",
-        "| 代码 | 名称 | PE | ROE% | 扣非ROE% | 市值(亿) | 行业 | 营收增% | 利润增% |",
-        "|------|------|-----|------|---------|---------|------|---------|---------|",
+        "| 代码 | 名称 | PE | ROE% | 扣非ROE% | 市值(亿) | 行业 | 概念板块 | 营收增% | 利润增% |",
+        "|------|------|-----|------|---------|---------|------|---------|---------|---------|",
     ]
-    for c in candidates[:15]:
+    for c in candidates[:20]:
         pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
         roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
         droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
         mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
         rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
         prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
-        lines.append(f"| {c.get('code','')} | {c.get('name','')} | {pe} | {roe} | {droe} | {mv} | {c.get('industry','')} | {rev} | {prof} |")
+        concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
+        lines.append(f"| {c.get('code','')} | {c.get('name','')} | {pe} | {roe} | {droe} | {mv} | {c.get('industry','')} | {concepts_str} | {rev} | {prof} |")
 
     lines.extend([
         "",

@@ -51,7 +51,8 @@ def screen_satellite(candidates,
         ind = c.get("industry")
         rev = c.get("rev_growth")
         mv = c.get("mktcap")
-        if ind not in theme:
+        is_concept = bool(c.get("concepts"))  # 概念股不受行业限制
+        if not is_concept and ind not in theme:
             continue
         if rev is None or rev < rev_min:
             continue

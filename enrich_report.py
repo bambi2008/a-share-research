@@ -70,7 +70,8 @@ def build_satellite_section(candidates, satellite_mod=None, top_n=5):
             rev = f"{c['rev_growth']:.0f}" if c.get("rev_growth") is not None else "-"
             prof = f"{c['profit_growth']:.0f}" if c.get("profit_growth") is not None else "-"
             mv = f"{c['mktcap']:.0f}" if c.get("mktcap") is not None else "-"
-            r.append(f"| {c['code']} | {c.get('name','')} | {c.get('industry','')} | "
+            name = c.get('name') or c.get('code', '?')
+            r.append(f"| {c['code']} | {name} | {c.get('industry','')} | "
                      f"{rev} | {prof} | {mv} | {c.get('per_name_cap_note','')} |")
     return "\n".join(r)
 
