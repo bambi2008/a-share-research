@@ -169,175 +169,124 @@ class Terminal:
         self.cur_tree = tree
 
     def _show_report(self, text, accent_color=ACCENT):
-        """富文本报告面板 — 解析 markdown 风格文本，彩色分区显示"""
+        """富文本报告面板 — 用 Text widget + tags 彩色渲染"""
         for w in self.right.winfo_children(): w.destroy()
 
-        # ── 外层容器: Canvas + Scrollbar ──
-        canvas = tk.Canvas(self.right, bg=CARD, highlightthickness=0, bd=0)
-        scrollbar = ttk.Scrollbar(self.right, orient="vertical", command=canvas.yview)
-        inner = tk.Frame(canvas, bg=CARD)
+        st = tk.Text(self.right, font=("微软雅黑", 10), bg=CARD, fg=TEXT,
+                     relief="flat", bd=0, padx=16, pady=12, wrap=tk.WORD,
+                     state=tk.NORMAL, cursor="arrow")
+        vsb = ttk.Scrollbar(self.right, orient="vertical", command=st.yview)
+        st.configure(yscrollcommand=vsb.set)
+        st.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
 
-        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        _win_id = canvas.create_window((0, 0), window=inner, anchor="nw",
-                                        width=self.right.winfo_width()-22, tags=("inner",))
-        canvas.configure(yscrollcommand=scrollbar.set)
+        # ── 定义 tags ──
+        st.tag_configure("h1", font=("微软雅黑", 15, "bold"), foreground=accent_color,
+                          spacing1=12, spacing3=4)
+        st.tag_configure("h1_line", background=accent_color,
+                          foreground=accent_color, font=("微软雅黑", 1),
+                          spacing1=0, spacing3=6)
+        st.tag_configure("h2", font=("微软雅黑", 12, "bold"), foreground=ACCENT,
+                          spacing1=10, spacing3=3)
+        st.tag_configure("section_ch", font=("微软雅黑", 11, "bold"), foreground=ACCENT,
+                          spacing1=12, spacing3=4)
+        st.tag_configure("sep", foreground=BORDER, font=("微软雅黑", 2),
+                          spacing1=4, spacing3=4)
+        st.tag_configure("positive", foreground=GREEN)
+        st.tag_configure("negative", foreground=RED)
+        st.tag_configure("dim", foreground=TEXT2, font=("微软雅黑", 9))
+        st.tag_configure("table_hdr", font=("微软雅黑", 9, "bold"),
+                          foreground=TEXT, background=CARD2)
+        st.tag_configure("table_row0", foreground=TEXT2, background=CARD)
+        st.tag_configure("table_row1", foreground=TEXT2, background="#1e2130")
+        st.tag_configure("mono", font=("Consolas", 9))
+        st.tag_configure("warn", foreground="#f59e0b")
 
-        # inner 宽度跟踪 canvas
-        def _on_canvas_resize(event):
-            try:
-                canvas.itemconfig("inner", width=event.width-4)
-            except Exception:
-                pass
-        canvas.bind("<Configure>", _on_canvas_resize, add="+")
-
-        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-
-        # 鼠标滚轮
-        def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        canvas.bind_all("<MouseWheel>", _on_mousewheel)
-        # 清理绑定
-        def _unbind(_e):
-            canvas.unbind_all("<MouseWheel>")
-
-        rpad = {"padx": 18, "pady": (3, 0), "fill": tk.X}
-
-        # ── 逐行解析渲染 ──
+        # ── 逐行解析插入 ──
         lines = text.split("\n")
-        in_table = False
-        table_rows = []
         i = 0
         while i < len(lines):
             line = lines[i]
 
-            # === 分隔线头 ===
+            # === 标题块 ===
             if line.startswith("===") and len(line.strip("=")) <= 3:
-                # 吃掉连续的 === 行, 取中间文字为标题
                 j = i + 1
                 while j < len(lines) and lines[j].startswith("===") and len(lines[j].strip("=")) <= 3:
                     j += 1
-                # i..j 之间的文字行是标题
-                title_lines = [l.strip() for l in lines[i:j] if not l.startswith("===") and l.strip()]
-                title = title_lines[0] if title_lines else ""
-                lbl = tk.Label(inner, text=title, font=("微软雅黑", 14, "bold"),
-                               fg=accent_color, bg=CARD, anchor="w")
-                lbl.pack(**rpad)
-                # 下划线
-                tk.Frame(inner, bg=accent_color, height=2).pack(fill=tk.X, padx=18, pady=(2, 8))
+                titles = [l.strip() for l in lines[i:j] if not l.startswith("===") and l.strip()]
+                if titles:
+                    st.insert(tk.END, titles[0] + "\n", "h1")
+                # 下划线模拟
+                st.insert(tk.END, "─" * 60 + "\n", "h1_line")
                 i = j
                 continue
 
             # --- 分隔线
             if line.startswith("---") and len(line.strip("-")) <= 3:
-                tk.Frame(inner, bg=BORDER, height=1).pack(fill=tk.X, padx=18, pady=(8, 4))
+                st.insert(tk.END, "─" * 50 + "\n", "sep")
                 i += 1
                 continue
 
-            # Markdown table header: | col | col | ...
-            if line.startswith("|") and line.count("|") >= 3:
-                # 判断是否是表头分隔行 (|---|---|)
-                if all(c in "|-: " for c in line):
-                    i += 1
-                    continue
-                if not in_table:
-                    in_table = True
-                    table_rows = []
-                table_rows.append([c.strip() for c in line.split("|")[1:-1]])
-                i += 1
-                # 看一下下一行: 如果还是表格行继续，否则渲染
-                if i < len(lines) and lines[i].startswith("|") and lines[i].count("|") >= 3:
-                    continue
-                # 渲染表格
-                if table_rows:
-                    self._render_mini_table(inner, table_rows)
-                    table_rows = []
-                    in_table = False
-                continue
-
-            # = 分隔线(投资建议特有)
+            # ==== 分隔（投资建议特有）
             if line.startswith("====") or (line.startswith("==") and len(line.strip("=")) <= 3):
-                tk.Frame(inner, bg=BORDER, height=1).pack(fill=tk.X, padx=18, pady=6)
+                st.insert(tk.END, "─" * 50 + "\n", "sep")
                 i += 1
                 continue
 
             # ## 小标题
             if line.startswith("## "):
-                section = line[3:].strip()
-                color = GREEN if "仓" in section or "候选" in section else TEAL
-                tk.Label(inner, text=section, font=("微软雅黑", 11, "bold"),
-                         fg=color, bg=CARD, anchor="w").pack(**rpad, pady=(10, 3))
+                st.insert(tk.END, line[3:].strip() + "\n", "h2")
                 i += 1
                 continue
 
             # 【一、】中文标题
             if line.strip().startswith("【"):
-                tk.Label(inner, text=line.strip(), font=("微软雅黑", 11, "bold"),
-                         fg=ACCENT, bg=CARD, anchor="w").pack(**rpad, pady=(12, 4))
+                st.insert(tk.END, line.strip() + "\n", "section_ch")
                 i += 1
                 continue
 
-            # 说明/引用行
+            # 说明/引用
             if line.strip().startswith("> ") or line.strip().startswith("说明:") or line.strip().startswith("*本"):
-                tk.Label(inner, text=line.strip(), font=("微软雅黑", 9),
-                         fg=TEXT2, bg=CARD, anchor="w", wraplength=700).pack(**rpad, pady=(2, 1))
+                st.insert(tk.END, line.strip() + "\n", "dim")
                 i += 1
                 continue
 
             # 空行
             if not line.strip():
-                # 紧凑间距
+                st.insert(tk.END, "\n")
                 i += 1
                 continue
 
-            # 普通文本 — 处理内联 +/-
-            self._render_rich_line(inner, line, rpad)
+            # 表格行 | ... |
+            if line.startswith("|") and line.count("|") >= 3:
+                if all(c in "|-: " for c in line):
+                    i += 1; continue
+                st.insert(tk.END, line + "\n", "mono")
+                i += 1
+                continue
+
+            # 普通文本
+            self._insert_colored(st, line.strip() + "\n")
             i += 1
 
-        self.cur_text = inner  # 标记
+        st.config(state=tk.DISABLED)
+        self.cur_text = st
+
+    def _insert_colored(self, st, txt):
+        """插入文本，对数词着色"""
+        import re
+        parts = re.split(r'(\+[0-9,.]+%|\-[0-9,.]+%|\+[0-9,.]+|\-[0-9,.]+)', txt)
+        for p in parts:
+            if re.match(r'\+[0-9,.]+%?$', p):
+                st.insert(tk.END, p, "positive")
+            elif re.match(r'\-[0-9,.]+%?$', p):
+                st.insert(tk.END, p, "negative")
+            else:
+                st.insert(tk.END, p)
 
     def _render_mini_table(self, parent, rows):
-        """在 frame 内渲染小型表格（label 模拟）"""
-        if not rows:
-            return
-        tbl = tk.Frame(parent, bg=CARD)
-        tbl.pack(fill=tk.X, padx=18, pady=(4, 8))
-
-        ncols = max(len(r) for r in rows)
-        # 列宽估算
-        col_widths = [12] * ncols
-        for r in rows:
-            for ci, cell in enumerate(r[:ncols]):
-                col_widths[ci] = max(col_widths[ci], min(len(cell)*2 + 4, 22))
-
-        for ri, row in enumerate(rows):
-            bg_row = CARD2 if ri == 0 else (CARD if ri % 2 == 0 else "#1e2130")
-            fg_row = TEXT if ri == 0 else TEXT2
-            ft_row = ("微软雅黑", 9, "bold") if ri == 0 else ("Consolas", 9)
-            for ci, cell in enumerate(row[:ncols]):
-                # 颜色
-                fg = fg_row
-                if "+" in cell and "%" in cell: fg = GREEN
-                elif "-" in cell and "%" in cell: fg = RED
-                lbl = tk.Label(tbl, text=cell, font=ft_row, fg=fg, bg=bg_row,
-                               anchor="center", width=col_widths[ci])
-                lbl.grid(row=ri, column=ci, sticky="ew", padx=1, pady=1)
-            for ci in range(len(row), ncols):
-                tk.Label(tbl, text="", bg=bg_row).grid(row=ri, column=ci, sticky="ew")
-
-    def _render_rich_line(self, parent, line, rpad):
-        """渲染单行文本，数词着色"""
-        fg = TEXT2
-        ft = ("微软雅黑", 10)
-        txt = line.strip()
-        if not txt:
-            return
-        # · 开头的条目
-        if txt.startswith("· ") or txt.startswith("- "):
-            fg = TEXT
-        # 包含正向/负向数据
-        tk.Label(parent, text=txt, font=ft, fg=fg, bg=CARD, anchor="w",
-                 wraplength=720).pack(**rpad, pady=(1, 2))
+        """(保留接口兼容，Text 模式下用 mono tag 替代)"""
+        pass
 
     def _show_text(self, text, font=("微软雅黑", 10)):
         """简单文本（错误信息等）"""
