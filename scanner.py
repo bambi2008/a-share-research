@@ -493,6 +493,34 @@ def run_scan(progress_callback=None, cancel_check=None):
                                 if cand_industry else (None, 0))
     concentration = (top_count / len(candidates) * 100) if candidates else 0
 
+    # ── 4.8 技术面趋势（仅对候选池TOP30，避免全市场请求）──
+    tech_indicators = {}
+    if candidates:
+        log("技术面趋势...")
+        check_cancel()
+        try:
+            import tech_analysis
+            tech_indicators = tech_analysis.analyze_candidates(
+                candidates,
+                progress_callback=lambda m: log(f"  {m}"),
+                max_workers=5)
+            # 注入候选
+            for c in candidates:
+                ti = tech_indicators.get(c.get("code", ""))
+                if ti:
+                    c["tech"] = ti
+                    c["trend"] = ti.get("trend")
+                    c["rsi14"] = ti.get("rsi14")
+                    c["above_ma60"] = ti.get("above_ma60")
+                else:
+                    c["tech"] = None
+                    c["trend"] = None
+                    c["rsi14"] = None
+                    c["above_ma60"] = None
+            log(f"  技术面: {len(tech_indicators)} 只")
+        except Exception as e:
+            log(f"  技术面跳过: {e}")
+
     log(f"  行业: {len(industry_stats)}个, 候选: {len(candidates)}只")
 
     # ── 持仓体检 ──

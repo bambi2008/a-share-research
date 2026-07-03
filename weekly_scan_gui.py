@@ -388,7 +388,7 @@ class Terminal:
         cands = m.get("candidates_full") or []
         if not cands: return
         self.view_scan_btn.config(state=tk.DISABLED)
-        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","营收增%","利润增%")
+        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
         rows = []
         for c in cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -401,7 +401,12 @@ class Terminal:
             concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
             div_str = f"{c.get('div_yield'):.1f}%" if c.get('div_yield') else "-"
             insider_str = {"red":"!卖","yellow":"?卖"}.get(c.get('insider_flag'), "-")
-            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, rev, prof))
+            trend = c.get('trend', '')
+            trend_str = {"up":"↑","down":"↓","flat":"→"}.get(trend, "-")
+            rsi = c.get('rsi14')
+            if rsi is not None:
+                trend_str += f" {rsi:.0f}"
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
         self._show_table(cols, rows, height=22)
 
     def _hk_worker(self):
@@ -612,7 +617,7 @@ class Terminal:
                     self.summary.config(state=tk.DISABLED)
                     # 表格
                     if cands:
-                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","营收增%","利润增%")
+                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
                         rows = []
                         for c in cands[:40]:
                             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -625,7 +630,12 @@ class Terminal:
                             concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
                             div_str = f"{c.get('div_yield'):.1f}%" if c.get('div_yield') else "-"
                             insider_str = {"red":"!卖","yellow":"?卖"}.get(c.get('insider_flag'), "-")
-                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, rev, prof))
+                            trend = c.get('trend', '')
+                            trend_str = {"up":"↑","down":"↓","flat":"→"}.get(trend, "-")
+                            rsi = c.get('rsi14')
+                            if rsi is not None:
+                                trend_str += f" {rsi:.0f}"
+                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
                         self._show_table(cols, rows, height=22)
                 elif k == "research_done":
                     self.busy = False; self.prog.stop(); self._status("深度分析完成", PURPLE)
