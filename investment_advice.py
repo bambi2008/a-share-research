@@ -136,7 +136,7 @@ def _fmt_plan_table(plans):
 
 
 def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
-                    progress_callback=None, equity=None):
+                    progress_callback=None, equity=None, macro_data=None):
     """生成投资建议: 硬规则计划 + LLM 定性分析。
 
     equity: 账户总资产（用于把仓位上限换算成可买金额）。GUI 传 portfolio.total_equity()。
@@ -166,6 +166,13 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
 
     log("生成定性分析...")
     prompt = build_qualitative_prompt(cands, plans, growth_mode, summary, data_period)
+
+    # 注入宏观背景
+    if macro_data:
+        import macro_context
+        macro_text = macro_context.macro_prompt_context(macro_data)
+        if macro_text:
+            prompt += macro_text
     try:
         analysis = llm_chat_fn([{"role": "user", "content": prompt}],
                                temperature=0.4, max_tokens=2000)

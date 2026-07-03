@@ -300,6 +300,49 @@ def run_scan(progress_callback=None, cancel_check=None):
     except Exception as e:
         log(f"  概念板块跳过: {e}")
 
+    # ── 2.6 扩展数据（并行）：高管增减持 + 宏观 + 分红 ──
+    log("2.6 扩展数据...")
+    check_cancel()
+    insider_alerts = {}
+    macro_data = {}
+    dividend_data = {}
+
+    def _fetch_insider():
+        try:
+            import insider_check
+            return insider_check.fetch_insider_changes(
+                progress_callback=lambda m: log(f"  {m}"))
+        except Exception as e:
+            log(f"  高管增减持跳过: {e}")
+            return {}
+
+    def _fetch_macro():
+        try:
+            import macro_context
+            return macro_context.fetch_macro_context(
+                progress_callback=lambda m: log(f"  {m}"))
+        except Exception as e:
+            log(f"  宏观跳过: {e}")
+            return {}
+
+    def _fetch_dividend():
+        try:
+            import dividend_screen
+            return dividend_screen.fetch_dividend_data(
+                progress_callback=lambda m: log(f"  {m}"))
+        except Exception as e:
+            log(f"  分红跳过: {e}")
+            return {}
+
+    # 并行获取（各模块内部有缓存，不会重复请求）
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+        f_insider = pool.submit(_fetch_insider)
+        f_macro = pool.submit(_fetch_macro)
+        f_dividend = pool.submit(_fetch_dividend)
+        insider_alerts = f_insider.result(timeout=30)
+        macro_data = f_macro.result(timeout=30)
+        dividend_data = f_dividend.result(timeout=30)
+
     import data_source as ds
     # 目标股票池：目标行业 + 概念成分股
     target_codes = [
@@ -367,6 +410,21 @@ def run_scan(progress_callback=None, cancel_check=None):
         # 概念标签
         concepts = code_concepts.get(code, [])
 
+        # 高管增减持检查
+        insider_flag = None
+        insider_detail = ""
+        if insider_alerts:
+            ia = insider_alerts.get(code)
+            if ia:
+                insider_flag = ia["alert"]
+                insider_detail = f"高管{ia['alert']}告警(卖{ia['sell_shares']}股/卖比{ia['sell_ratio']}%)"
+
+        # 分红数据
+        div_info = {}
+        if dividend_data:
+            import dividend_screen
+            div_info = dividend_screen.get_dividend_info(code, dividend_data, price)
+
         candidates.append({
             'code': code, 'name': str(row['股票简称']),
             'pe': pe, 'roe': roe, 'price': price,
@@ -374,6 +432,11 @@ def run_scan(progress_callback=None, cancel_check=None):
             'rev_growth': rev_g if not pd.isna(rev_g) else None,
             'profit_growth': profit_g if not pd.isna(profit_g) else None,
             'concepts': concepts,
+            'insider_flag': insider_flag,
+            'insider_detail': insider_detail,
+            'div_yield': div_info.get('div_yield'),
+            'div_count': div_info.get('div_count'),
+            'avg_div': div_info.get('avg_div'),
         })
 
     if BOOM_MODE:
@@ -477,6 +540,8 @@ def run_scan(progress_callback=None, cancel_check=None):
         "top_industry": top_industry,
         "ttm_available": ttm_available,
         "scan_time": now.strftime('%Y-%m-%d %H:%M'),
+        "macro_data": macro_data,
+        "insider_alerts": insider_alerts,
         "data_sources": {
             "index": idx_src,
             "price": price_src,

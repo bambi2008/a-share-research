@@ -388,7 +388,7 @@ class Terminal:
         cands = m.get("candidates_full") or []
         if not cands: return
         self.view_scan_btn.config(state=tk.DISABLED)
-        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","营收增%","利润增%")
+        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","营收增%","利润增%")
         rows = []
         for c in cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -399,7 +399,9 @@ class Terminal:
             rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
             prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
             concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
-            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, rev, prof))
+            div_str = f"{c.get('div_yield'):.1f}%" if c.get('div_yield') else "-"
+            insider_str = {"red":"!卖","yellow":"?卖"}.get(c.get('insider_flag'), "-")
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, rev, prof))
         self._show_table(cols, rows, height=22)
 
     def _hk_worker(self):
@@ -453,6 +455,7 @@ class Terminal:
             report = investment_advice.generate_advice(
                 self.last_scan, self.growth_var.get() or self.boom_var.get(), chat,
                 boom_mode=self.boom_var.get(), equity=equity,
+                macro_data=self.last_scan.get("macro_data"),
                 progress_callback=lambda m: self.q.put(("prog", m)))
             self.q.put(("advice_done", report))
         except Exception as e: self.q.put(("err", str(e)))
@@ -593,7 +596,12 @@ class Terminal:
                     # 摘要
                     self.summary.config(state=tk.NORMAL); self.summary.delete(1.0, tk.END)
                     cands = m.get("candidates_full") or []
+                    # 添加宏观摘要
+                    macro = m.get("macro_data", {})
+                    macro_summary = macro.get("summary", "")
                     s = f"PE 3-40 | ROE>5% | 市值50-10000亿\n{m['candidate_count']}只候选 | {m['industry_count']}行业 | {m['total_stocks']}只覆盖"
+                    if macro_summary:
+                        s += f"\n宏观: {macro_summary}"
                     conc = m.get("concentration", 0)
                     if conc >= 30: s += f"\n[!] 集中度 {m.get('top_industry','')} {conc:.0f}%"
                     # 数据源指示
@@ -604,7 +612,7 @@ class Terminal:
                     self.summary.config(state=tk.DISABLED)
                     # 表格
                     if cands:
-                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","营收增%","利润增%")
+                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","营收增%","利润增%")
                         rows = []
                         for c in cands[:40]:
                             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -615,7 +623,9 @@ class Terminal:
                             rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
                             prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
                             concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
-                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, rev, prof))
+                            div_str = f"{c.get('div_yield'):.1f}%" if c.get('div_yield') else "-"
+                            insider_str = {"red":"!卖","yellow":"?卖"}.get(c.get('insider_flag'), "-")
+                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, rev, prof))
                         self._show_table(cols, rows, height=22)
                 elif k == "research_done":
                     self.busy = False; self.prog.stop(); self._status("深度分析完成", PURPLE)
