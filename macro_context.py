@@ -41,9 +41,13 @@ def fetch_macro_context(progress_callback=None, force_refresh=False):
         df = ak.macro_china_pmi_yearly()
         if len(df) > 0:
             last = df.iloc[-1]
-            result["pmi"] = float(last.iloc[1]) if len(last) > 1 else None
+            try:
+                result["pmi"] = float(last.iloc[1])
+            except (ValueError, TypeError):
+                result["pmi"] = None
             result["pmi_date"] = str(last.iloc[0])
-            log(f"  PMI: {result['pmi']}")
+            if result.get("pmi"):
+                log(f"  PMI: {result['pmi']}")
     except Exception as e:
         log(f"  PMI跳过: {e}")
         result["pmi"] = None
@@ -53,9 +57,13 @@ def fetch_macro_context(progress_callback=None, force_refresh=False):
         df = ak.macro_china_cpi_yearly()
         if len(df) > 0:
             last = df.iloc[-1]
-            result["cpi"] = float(last.iloc[1]) if len(last) > 1 else None
+            try:
+                result["cpi"] = float(last.iloc[1])
+            except (ValueError, TypeError):
+                result["cpi"] = None
             result["cpi_date"] = str(last.iloc[0])
-            log(f"  CPI: {result['cpi']}%")
+            if result.get("cpi") is not None:
+                log(f"  CPI: {result['cpi']}%")
     except Exception as e:
         log(f"  CPI跳过: {e}")
         result["cpi"] = None

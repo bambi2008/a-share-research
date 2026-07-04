@@ -341,14 +341,23 @@ def run_scan(progress_callback=None, cancel_check=None):
             log(f"  分红跳过: {e}")
             return {}
 
-    # 并行获取（各模块内部有缓存，不会重复请求）
+    # 并行获取（各模块内部有缓存和超时保护）
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
         f_insider = pool.submit(_fetch_insider)
         f_macro = pool.submit(_fetch_macro)
         f_dividend = pool.submit(_fetch_dividend)
-        insider_alerts = f_insider.result(timeout=30)
-        macro_data = f_macro.result(timeout=30)
-        dividend_data = f_dividend.result(timeout=30)
+        try:
+            insider_alerts = f_insider.result(timeout=60) or {}
+        except Exception:
+            insider_alerts = {}
+        try:
+            macro_data = f_macro.result(timeout=20) or {}
+        except Exception:
+            macro_data = {}
+        try:
+            dividend_data = f_dividend.result(timeout=40) or {}
+        except Exception:
+            dividend_data = {}
 
     import data_source as ds
     # 目标股票池：目标行业 + 概念成分股
