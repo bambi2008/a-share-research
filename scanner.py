@@ -342,7 +342,8 @@ def run_scan(progress_callback=None, cancel_check=None):
             return {}
 
     # 并行获取（各模块内部有缓存和超时保护）
-    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=3)
+    try:
         f_insider = pool.submit(_fetch_insider)
         f_macro = pool.submit(_fetch_macro)
         f_dividend = pool.submit(_fetch_dividend)
@@ -350,14 +351,19 @@ def run_scan(progress_callback=None, cancel_check=None):
             insider_alerts = f_insider.result(timeout=60) or {}
         except Exception:
             insider_alerts = {}
+            f_insider.cancel()
         try:
             macro_data = f_macro.result(timeout=20) or {}
         except Exception:
             macro_data = {}
+            f_macro.cancel()
         try:
             dividend_data = f_dividend.result(timeout=40) or {}
         except Exception:
             dividend_data = {}
+            f_dividend.cancel()
+    finally:
+        pool.shutdown(wait=False)
 
     import data_source as ds
     # 目标股票池：目标行业 + 概念成分股

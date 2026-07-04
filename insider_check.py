@@ -2,7 +2,7 @@
 """
 高管增减持监控 — 扫描董监高持股变动，标记抛售信号
 数据源: 上交所(stock_share_hold_change_sse) + 深交所(stock_share_hold_change_szse)
-每个源15秒硬超时，并行获取。
+每个源15秒硬超时，并行获取。超时后不等待线程（shutdown(wait=False)）。
 """
 import concurrent.futures
 
@@ -18,9 +18,7 @@ def _fetch_szse():
 
 
 def fetch_insider_changes(progress_callback=None):
-    """获取沪深两市董监高持股变动。并行+超时。
-    返回: {code: {name, sell_count, buy_count, sell_ratio, alert}}
-    """
+    """获取沪深两市董监高持股变动。硬超时，不等慢线程。"""
     def log(msg):
         if progress_callback:
             progress_callback(msg)
@@ -28,26 +26,33 @@ def fetch_insider_changes(progress_callback=None):
     sse_data = []
     szse_data = []
 
-    log("高管增减持: 沪深并行...")
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+    log("高管增减持: 沪深并行(各15s超时)...")
+    pool = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+    try:
         f_sse = pool.submit(_fetch_sse)
         f_szse = pool.submit(_fetch_szse)
 
         try:
             sse_data = f_sse.result(timeout=15)
-            log(f"  上交所: {len(sse_data)} 条变动")
+            log(f"  上交所: {len(sse_data)} 条")
         except concurrent.futures.TimeoutError:
-            log("  上交所: 超时跳过")
+            log("  上交所: 超时跳过(线程已放弃)")
+            f_sse.cancel()
         except Exception as e:
-            log(f"  上交所跳过: {e}")
+            log(f"  上交所: {e}")
 
         try:
             szse_data = f_szse.result(timeout=15)
-            log(f"  深交所: {len(szse_data)} 条变动")
+            log(f"  深交所: {len(szse_data)} 条")
         except concurrent.futures.TimeoutError:
-            log("  深交所: 超时跳过")
+            log("  深交所: 超时跳过(线程已放弃)")
+            f_szse.cancel()
         except Exception as e:
-            log(f"  深交所跳过: {e}")
+            log(f"  深交所: {e}")
+    finally:
+        # 关键: wait=False 不等待未完成的线程
+        pool.shutdown(wait=False)
 
     if not sse_data and not szse_data:
         log("  高管增减持: 两市均无数据")
@@ -55,8 +60,7 @@ def fetch_insider_changes(progress_callback=None):
 
     # 合并分析
     code_stats = {}
-    all_data = list(sse_data)
-    all_data.extend(szse_data)
+    all_data = list(sse_data) + list(szse_data)
 
     for row in all_data:
         try:
@@ -81,20 +85,17 @@ def fetch_insider_changes(progress_callback=None):
         except Exception:
             continue
 
-    # 生成告警
     alerts = {}
     for code, stats in code_stats.items():
         total = stats["sell"] + stats["buy"]
         if total == 0:
             continue
         sell_ratio = stats["sell"] / total
-
         alert_level = None
         if sell_ratio > 0.8 and stats["sell"] > 0:
             alert_level = "red"
         elif sell_ratio > 0.5:
             alert_level = "yellow"
-
         if alert_level:
             alerts[code] = {
                 "name": stats["name"],
@@ -104,10 +105,9 @@ def fetch_insider_changes(progress_callback=None):
                 "alert": alert_level,
             }
 
-    red_count = sum(1 for a in alerts.values() if a["alert"] == "red")
-    yellow_count = sum(1 for a in alerts.values() if a["alert"] == "yellow")
-    log(f"  高管减持告警: {red_count} 红 / {yellow_count} 黄 (共 {len(alerts)} 只)")
-
+    red = sum(1 for a in alerts.values() if a["alert"] == "red")
+    yellow = sum(1 for a in alerts.values() if a["alert"] == "yellow")
+    log(f"  高管减持告警: {red}红/{yellow}黄 (共{len(alerts)}只)")
     return alerts
 
 
