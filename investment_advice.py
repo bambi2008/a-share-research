@@ -154,6 +154,10 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
 
     summary = f"覆盖{scan_result.get('industry_count',0)}行业, {scan_result.get('total_stocks',0)}只股票"
 
+    # 四策略分池数据
+    strategy_results = scan_result.get("strategy_results", {})
+    import strategy_scan as ss
+
     log("计算风控计划...")
     plans = compute_rule_based_plan(cands, growth_mode, boom_mode, equity=equity)
 
@@ -161,38 +165,56 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
     from scanner import _report_quarter_dates
     q, _, _ = _report_quarter_dates()
     q_map = {"0331": "Q1", "0630": "Q2", "0930": "Q3", "1231": "Q4"}
-    q_label = q_map.get(q[4:], q[:4])
-    data_period = f"{q[:4]}年{q_label}"
+    data_period = f"{q[:4]}年{q_map.get(q[4:], q[:4])}"
 
-    log("生成定性分析...")
-    prompt = build_qualitative_prompt(cands, plans, growth_mode, summary, data_period)
+    # 为每个策略生成独立建议
+    all_analyses = []
+    strategy_order = [
+        ("value", "V 价值稳健"),
+        ("dividend", "D 红利收租"),
+        ("insider", "I 高管抄作业"),
+        ("turnaround", "T 困境反转"),
+    ]
 
-    # 注入宏观背景
-    if macro_data:
-        import macro_context
-        macro_text = macro_context.macro_prompt_context(macro_data)
-        if macro_text:
-            prompt += macro_text
-    try:
-        analysis = llm_chat_fn([{"role": "user", "content": prompt}],
-                               temperature=0.4, max_tokens=2000)
-    except Exception as e:
-        analysis = f"(定性分析生成失败: {e})"
+    for key, label in strategy_order:
+        pool = strategy_results.get(key, [])
+        if not pool:
+            continue
+        log(f"  {label}: {len(pool)}只...")
+        try:
+            prompt = build_qualitative_prompt(pool, plans, growth_mode, summary, data_period)
+            # 注入策略特定规则
+            rules_text = ss.strategy_buy_sell_rules()
+            # 提取对应策略的规则段
+            for section in rules_text.split("### "):
+                if section.startswith(ss.STRATEGIES[key]["icon"]):
+                    prompt += f"\n\n## 以下为本策略({label})的硬规则，请严格遵守:\n### {section}"
+                    break
+            if macro_data:
+                import macro_context
+                mt = macro_context.macro_prompt_context(macro_data)
+                if mt:
+                    prompt += mt
+            analysis = llm_chat_fn([{"role": "user", "content": prompt}],
+                                   temperature=0.4, max_tokens=800)
+            all_analyses.append(f"## {label}\n{analysis}\n")
+        except Exception as e:
+            all_analyses.append(f"## {label}\n(分析失败: {e})\n")
 
+    # 组装报告
     report = []
     report.append("=" * 64)
-    report.append("  投资建议 — 风控硬规则 + AI 定性分析")
+    report.append("  投资建议 — 四策略买卖计划")
     report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 财报截止: {data_period}")
     report.append(f"  模式: {'爆发/卫星' if boom_mode else ('成长股' if growth_mode else '价值股')}")
     report.append("=" * 64)
     report.append("")
-    report.append(_fmt_plan_table(plans))
+    report.append(ss.strategy_buy_sell_rules())
     report.append("")
     report.append("-" * 64)
-    report.append(analysis)
+    report.append("\n".join(all_analyses))
     report.append("")
     report.append("-" * 64)
-    report.append("说明: 仓位/止损为系统按三仓规则计算的纪律约束(可复现)；")
-    report.append("定性分析由 AI 生成，仅供研究参考，均不构成投资建议。买卖由你自行决策。")
-    report.append("卫星仓请只用可承受归零的资金。")
+    report.append("说明: 仓位/止损为系统按三仓规则计算的纪律约束；")
+    report.append("AI定性分析仅供研究参考，不构成投资建议。")
     return "\n".join(report)

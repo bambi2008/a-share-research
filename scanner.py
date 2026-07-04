@@ -546,6 +546,29 @@ def run_scan(progress_callback=None, cancel_check=None):
 
     log(f"  行业: {len(industry_stats)}个, 候选: {len(candidates)}只")
 
+    # ── 4.9 变化追踪(对比上次扫描) ──
+    try:
+        import scan_delta
+        delta = scan_delta.compute_delta(candidates)
+        scan_delta.save_scan(candidates, now.strftime('%Y-%m-%d %H:%M'))
+    except Exception:
+        delta = None
+
+    # ── 5.0 四策略分池 ──
+    try:
+        import strategy_scan
+        strategy_results = strategy_scan.apply_strategy_filters(
+            candidates, dividend_data=dividend_data, insider_alerts=insider_alerts)
+        strategy_report = strategy_scan.build_strategy_report(strategy_results, macro_data)
+        strategy_rules = strategy_scan.strategy_buy_sell_rules()
+        # 追加到主报告
+        report += "\n\n" + strategy_report + strategy_rules
+        log("  策略分池: " + ", ".join(f"{strategy_scan.STRATEGIES[k]['name']}x{len(v)}"
+                                        for k, v in strategy_results.items()))
+    except Exception as e:
+        strategy_results = {}
+        log(f"  策略分池跳过: {e}")
+
     # ── 持仓体检 ──
     import position
     positions, __alerts = position.check_positions(price_map)
@@ -593,6 +616,8 @@ def run_scan(progress_callback=None, cancel_check=None):
         "scan_time": now.strftime('%Y-%m-%d %H:%M'),
         "macro_data": macro_data,
         "insider_alerts": insider_alerts,
+        "delta": delta,
+        "strategy_results": strategy_results,
         "data_sources": {
             "index": idx_src,
             "price": price_src,

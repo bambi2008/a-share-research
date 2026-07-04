@@ -17,7 +17,7 @@ if getattr(sys, 'frozen', False):
 import scanner, backtest, research, llm_client
 import investment_advice, industry_report, enrich_report  # PyInstaller显式导入
 import portfolio, portfolio_config, hk_stocks
-import insider_check, macro_context, dividend_screen, tech_analysis, concept_stocks
+import insider_check, macro_context, dividend_screen, tech_analysis, concept_stocks, strategy_scan
 
 
 # ── 主题配色 ──
@@ -612,6 +612,19 @@ class Terminal:
                         s += f"\n宏观: {macro_summary}"
                     conc = m.get("concentration", 0)
                     if conc >= 30: s += f"\n[!] 集中度 {m.get('top_industry','')} {conc:.0f}%"
+                    # 变化追踪
+                    delta = m.get("delta")
+                    if delta and delta.get("delta_summary"):
+                        s += f"\nvs上次: {delta['delta_summary']}"
+                    # 策略分池
+                    sr = m.get("strategy_results", {})
+                    if sr:
+                        parts = []
+                        icons = {"value": "V", "dividend": "D", "insider": "I", "turnaround": "T"}
+                        for k in ("value", "dividend", "insider", "turnaround"):
+                            if sr.get(k):
+                                parts.append(f"{icons.get(k,k)}{len(sr[k])}")
+                        s += f"\n策略: {' '.join(parts)}"
                     # 数据源指示
                     ds = m.get("data_sources", {})
                     if ds:
