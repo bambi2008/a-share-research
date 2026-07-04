@@ -66,11 +66,11 @@ def compute_indicators(close_prices):
     }
 
 
-def fetch_one_stock(code, timeout=10):
-    """获取单只股票的日线数据"""
+def fetch_one_stock(code, timeout=8):
+    """获取单只股票的日线数据，8秒硬超时"""
     import akshare as ak
+    import concurrent.futures
     try:
-        # sh/sz prefix
         if code.startswith(("60", "68", "90")):
             symbol = f"sh{code}"
         elif code.startswith(("00", "30", "20")):
@@ -80,12 +80,15 @@ def fetch_one_stock(code, timeout=10):
         else:
             symbol = f"sz{code}"
 
-        df = ak.stock_zh_a_daily(symbol=symbol, start_date="20250801", adjust="qfq")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(ak.stock_zh_a_daily, symbol=symbol,
+                              start_date="20250801", adjust="qfq")
+            df = fut.result(timeout=timeout)
         if df is None or len(df) < 60:
             return None
         closes = [float(c) for c in df["close"].values]
         return compute_indicators(closes)
-    except Exception:
+    except (concurrent.futures.TimeoutError, Exception):
         return None
 
 

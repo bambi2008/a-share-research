@@ -34,7 +34,10 @@ def fetch_dividend_data(progress_callback=None, force_refresh=False):
     log("分红数据: 同花顺...")
 
     try:
-        df = ak.stock_history_dividend()
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(ak.stock_history_dividend)
+            df = fut.result(timeout=15)
         log(f"  分红: {len(df)} 只股票")
     except Exception as e:
         log(f"  分红跳过: {e}")
