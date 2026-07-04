@@ -60,24 +60,29 @@ def fetch_macro_context(progress_callback=None, force_refresh=False):
         log(f"  CPI跳过: {e}")
         result["cpi"] = None
 
-    # M2
+    # M2 — 数据源慢，加硬超时
     try:
-        df = ak.macro_china_money_supply()
-        if len(df) > 0:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(ak.macro_china_money_supply)
+            df = fut.result(timeout=8)  # 8秒硬超时
+        if df is not None and len(df) > 0:
             last = df.iloc[-1]
-            # M2通常在第3-4列
             for col_idx in [2, 3, 4]:
                 try:
                     val = float(last.iloc[col_idx])
-                    if 100 < val < 500:  # M2通常在200-300万亿
+                    if 10 < val < 500:  # M2 10-500万亿范围
                         result["m2"] = val
                         break
                 except (ValueError, TypeError, IndexError):
                     continue
             result["m2_date"] = str(last.iloc[0])
-            log(f"  M2: {result.get('m2', 'N/A')}万亿")
-    except Exception as e:
-        log(f"  M2跳过: {e}")
+            if result.get("m2"):
+                log(f"  M2: {result['m2']:.0f}万亿")
+            else:
+                log(f"  M2: 数据格式不匹配，跳过")
+    except (concurrent.futures.TimeoutError, Exception) as e:
+        log(f"  M2跳过: 超时或数据不可用")
         result["m2"] = None
 
     # 生成摘要
