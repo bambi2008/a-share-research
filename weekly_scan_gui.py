@@ -383,6 +383,38 @@ class Terminal:
         self.busy = True; self.prog.start(8); self._status("获取港股…", "#6366f1")
         threading.Thread(target=self._hk_worker, daemon=True).start()
 
+    def _show_filtered_table(self):
+        """根据策略筛选重新显示表格"""
+        m = self.last_scan
+        if not m: return
+        cands = m.get("candidates_full") or []
+        sr = m.get("strategy_results", {})
+        fkey = self._strategy_filter.get() if hasattr(self, '_strategy_filter') else "all"
+        if fkey != "all" and sr.get(fkey):
+            display_cands = [c for c in cands if c.get("strategy") == fkey]
+        else:
+            display_cands = cands[:40]
+        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+        rows = []
+        for c in display_cands[:40]:
+            pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
+            roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
+            droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
+            price = f"{c.get('price',0):.2f}" if c.get('price') else "-"
+            mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
+            rev = f"{c.get('rev_growth',0):.1f}" if c.get('rev_growth') is not None else "-"
+            prof = f"{c.get('profit_growth',0):.1f}" if c.get('profit_growth') is not None else "-"
+            concepts_str = "/".join(c.get('concepts', [])) if c.get('concepts') else "-"
+            div_str = f"{c.get('div_yield'):.1f}%" if c.get('div_yield') else "-"
+            insider_str = {"red":"!卖","yellow":"?卖"}.get(c.get('insider_flag'), "-")
+            trend = c.get('trend', '')
+            trend_str = {"up":"↑","down":"↓","flat":"→"}.get(trend, "-")
+            rsi = c.get('rsi14')
+            if rsi is not None:
+                trend_str += f" {rsi:.0f}"
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
+        self._show_table(cols, rows, height=22)
+
     def _view_scan(self):
         """重新显示扫描结果（不重新扫描）"""
         if self.busy: return
@@ -631,11 +663,29 @@ class Terminal:
                         s += f"\n数据: 行情{ds.get('price','?')} | 指数{ds.get('index','?')} | 季报{ds.get('quarterly','?')}"
                     self.summary.insert(tk.END, s)
                     self.summary.config(state=tk.DISABLED)
+                    # 策略筛选按钮
+                    if sr:
+                        sf = tk.Frame(self.right, bg=CARD)
+                        sf.pack(fill=tk.X, padx=6, pady=(4,0))
+                        self._strategy_filter = tk.StringVar(value="all")
+                        for k, icon, color in [("all","全部","#475569"),("value","V价值",ACCENT),("dividend","D红利","#22c55e"),("insider","I高管","#f59e0b"),("turnaround","T反转","#ef4444")]:
+                            if k == "all" or sr.get(k):
+                                tk.Radiobutton(sf, text=icon, variable=self._strategy_filter, value=k,
+                                    font=("微软雅黑",8,"bold"), fg=TEXT2, bg=CARD, selectcolor=CARD,
+                                    activebackground=CARD, activeforeground=color,
+                                    cursor="hand2", indicatoron=False, padx=8, pady=2,
+                                    command=lambda: self._show_filtered_table()).pack(side=tk.LEFT)
                     # 表格
                     if cands:
+                        # 应用策略筛选
+                        fkey = self._strategy_filter.get() if hasattr(self, '_strategy_filter') else "all"
+                        if fkey != "all" and sr.get(fkey):
+                            display_cands = [c for c in cands if c.get("strategy") == fkey]
+                        else:
+                            display_cands = cands[:40]
                         cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
                         rows = []
-                        for c in cands[:40]:
+                        for c in display_cands[:40]:
                             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
                             roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
                             droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
