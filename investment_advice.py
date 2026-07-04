@@ -158,10 +158,7 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
     strategy_results = scan_result.get("strategy_results", {})
     import strategy_scan as ss
 
-    log("计算风控计划...")
-    plans = compute_rule_based_plan(cands, growth_mode, boom_mode, equity=equity)
-
-    # 计算数据截止期
+    log("计算数据截止期...")
     from scanner import _report_quarter_dates
     q, _, _ = _report_quarter_dates()
     q_map = {"0331": "Q1", "0630": "Q2", "0930": "Q3", "1231": "Q4"}
@@ -181,8 +178,13 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
         if not pool:
             continue
         log(f"  {label}: {len(pool)}只...")
+
+        # 为每个策略池计算硬规则计划
+        pool_plans = compute_rule_based_plan(pool, growth_mode, boom_mode, equity=equity)
+        plan_table = _fmt_plan_table(pool_plans)
+
         try:
-            prompt = build_qualitative_prompt(pool, plans, growth_mode, summary, data_period)
+            prompt = build_qualitative_prompt(pool, pool_plans, growth_mode, summary, data_period)
             # 注入策略特定规则
             rules_text = ss.strategy_buy_sell_rules()
             # 提取对应策略的规则段
@@ -197,7 +199,7 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
                     prompt += mt
             analysis = llm_chat_fn([{"role": "user", "content": prompt}],
                                    temperature=0.4, max_tokens=800)
-            all_analyses.append(f"## {label}\n{analysis}\n")
+            all_analyses.append(f"## {label}\n{plan_table}\n\n{analysis}\n")
         except Exception as e:
             all_analyses.append(f"## {label}\n(分析失败: {e})\n")
 
