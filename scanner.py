@@ -445,7 +445,8 @@ def run_scan(progress_callback=None, cancel_check=None):
         div_info = {}
         if dividend_data:
             import dividend_screen
-            div_info = dividend_screen.get_dividend_info(code, dividend_data, price)
+            di = dividend_screen.get_dividend_info(code, dividend_data, price)
+            div_info = di if di else {}
 
         candidates.append({
             'code': code, 'name': str(row['股票简称']),
