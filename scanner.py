@@ -13,6 +13,13 @@ from datetime import datetime, timedelta
 import concurrent.futures
 import os
 
+# ── 扩展模块导入(PyInstaller需要显式import才能打包) ──
+import insider_check       # noqa: F401
+import macro_context       # noqa: F401
+import dividend_screen     # noqa: F401
+import tech_analysis       # noqa: F401
+import concept_stocks      # noqa: F401
+
 # ── 行业列表(从 industries.json 加载，不存在则用默认) ──
 def _load_industries():
     import json, sys

@@ -15,6 +15,9 @@ if getattr(sys, 'frozen', False):
         sys.path.insert(0, _exe_dir)
 
 import scanner, backtest, research, llm_client
+import investment_advice, industry_report, enrich_report  # PyInstaller显式导入
+import portfolio, portfolio_config, hk_stocks
+import insider_check, macro_context, dividend_screen, tech_analysis, concept_stocks
 
 
 # ── 主题配色 ──
