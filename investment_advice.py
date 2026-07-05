@@ -156,6 +156,12 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
 
     # 四策略分池数据
     strategy_results = scan_result.get("strategy_results", {})
+    if not strategy_results:
+        # 诊断：检查scan_result有什么key
+        keys = list(scan_result.keys())
+        cands = scan_result.get("candidates_full", [])
+        strategy_results = {}
+        log(f"诊断: strategy_results为空, scan_result keys={keys}, cands={len(cands)}")
     import strategy_scan as ss
 
     log("计算数据截止期...")
@@ -226,6 +232,7 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
 
     if not has_any:
         report.append("(暂无策略分池数据，请先完成扫描)")
+        report.append(f"(诊断: scan keys={list(scan_result.keys())[:8]}, cands={len(scan_result.get('candidates_full',[]))})")
 
     report.append(ss.strategy_buy_sell_rules())
     report.append("")
