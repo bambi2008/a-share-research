@@ -328,34 +328,70 @@ class Terminal:
             r = scanner.run_scan(
                 progress_callback=lambda m: self.q.put(("prog", m)),
                 cancel_check=lambda: self.cancel_flag)
-            # 扫描完成后，在GUI层补做策略分池（绕过PyInstaller编译问题）
+            # 扫描完成后，在GUI层补做策略分池
             self.q.put(("prog", "策略分池..."))
             try:
-                import strategy_scan, json, os
+                import json, os
                 cands = r.get("candidates_full", [])
-                # 加载缓存的扩展数据
-                exe_dir = os.path.dirname(sys.executable) if getattr(sys,'frozen',False) else "."
+
+                # 加载分红缓存
                 dividend_data = {}
-                insider_alerts = r.get("insider_alerts", {})
+                exe_dir = os.path.dirname(sys.executable) if getattr(sys,'frozen',False) else "."
+                cache_path = os.path.join(exe_dir, ".dividend_cache.json")
                 try:
-                    cache = json.load(open(os.path.join(exe_dir, ".dividend_cache.json"), "r"))
-                    dividend_data = cache
-                    # 注入分红数据到候选
-                    import dividend_screen
-                    for c in cands:
-                        di = dividend_screen.get_dividend_info(c.get("code",""), dividend_data, c.get("price"))
-                        if di:
-                            c["div_yield"] = di.get("div_yield")
-                            c["div_count"] = di.get("div_count")
+                    dividend_data = json.load(open(cache_path, "r", encoding="utf-8"))
                 except: pass
-                sr = strategy_scan.apply_strategy_filters(cands, dividend_data, insider_alerts)
+
+                # 为每个候选注入分红数据（简单内联，不import dividend_screen）
+                for c in cands:
+                    code = c.get("code", "")
+                    price = c.get("price")
+                    dd = dividend_data.get(code)
+                    if dd and price and price > 0:
+                        avg_div = dd.get("avg_div", 0) or 0
+                        if avg_div > 0:
+                            c["div_yield"] = round(avg_div / price * 100, 2)
+                            c["div_count"] = dd.get("div_count", 0)
+
+                # === 内联四策略筛选 ===
+                sr = {"value": [], "dividend": [], "insider": [], "turnaround": []}
+
+                for c in cands:
+                    pe = c.get("pe")
+                    roe = c.get("roe")
+                    mv = c.get("mktcap")
+                    if pe is None or roe is None: continue
+
+                    # V 价值: PE 3-40, ROE>5, MC>50亿
+                    if 3 <= pe <= 40 and roe >= 5 and (mv is None or mv >= 50):
+                        sr["value"].append(c)
+
+                    # D 红利: PE<30, ROE>5, 股息率>1.5%或分红>=3次
+                    if pe <= 30 and roe >= 5:
+                        dy = c.get("div_yield")
+                        dc = c.get("div_count") or 0
+                        if (dy is not None and dy >= 1.5) or dc >= 3:
+                            sr["dividend"].append(c)
+
+                    # T 反转: PE<15, ROE 5-15%, 利润增速>0
+                    pg = c.get("profit_growth")
+                    if pe <= 15 and 5 <= roe <= 15 and pg is not None and pg > 0:
+                        sr["turnaround"].append(c)
+
+                # 排序+截断
+                sr["value"].sort(key=lambda x: x.get("roe") or 0, reverse=True)
+                sr["value"] = sr["value"][:15]
+                sr["dividend"].sort(key=lambda x: x.get("div_yield") or 0, reverse=True)
+                sr["dividend"] = sr["dividend"][:10]
+                sr["turnaround"].sort(key=lambda x: x.get("profit_growth") or 0, reverse=True)
+                sr["turnaround"] = sr["turnaround"][:10]
+
                 r["strategy_results"] = sr
                 parts = []
                 for k in ("value","dividend","insider","turnaround"):
                     n = len(sr.get(k, []))
-                    if n:
-                        parts.append(f"{k}x{n}")
-                self.q.put(("prog", f"策略分池: {' '.join(parts)}"))
+                    if n: parts.append(f"{k}x{n}")
+                self.q.put(("prog", f"策略: {' '.join(parts) if parts else '全部为空'}"))
             except Exception as e:
                 import traceback
                 self.q.put(("prog", f"策略分池失败: {e}"))
