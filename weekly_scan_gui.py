@@ -101,10 +101,13 @@ class Terminal:
                        activebackground=CARD, activeforeground=TEXT,
                        cursor="hand2").pack(side=tk.LEFT)
         tk.Checkbutton(opts, text="卫星", variable=self.boom_var).pack(side=tk.LEFT, padx=4)
-        tk.Checkbutton(opts, text="主板", variable=self.main_board_var,
+        # 主板过滤 — 独立一行更显眼
+        opts2 = tk.Frame(left, bg=CARD)
+        opts2.pack(fill=tk.X, padx=14, pady=(2, 4))
+        tk.Checkbutton(opts2, text="仅主板(600/000) 排除科创/创业板", variable=self.main_board_var,
                        font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
                        activebackground=CARD, activeforeground=TEXT,
-                       cursor="hand2").pack(side=tk.LEFT, padx=4)
+                       cursor="hand2").pack(side=tk.LEFT)
         tk.Label(opts, text="?", font=("微软雅黑", 9, "bold"), fg=TEXT2, bg=CARD,
                  cursor="hand2").pack(side=tk.RIGHT)
 
