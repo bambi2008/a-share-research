@@ -729,6 +729,8 @@ class Terminal:
                         for k in ("value", "dividend", "insider", "turnaround"):
                             if sr.get(k):
                                 parts.append(f"{icons.get(k,k)}{len(sr[k])}")
+                            else:
+                                parts.append(f"{icons.get(k,k)}空缺")
                         s += f"\n策略: {' '.join(parts)}"
                     # 数据源指示
                     ds = m.get("data_sources", {})
