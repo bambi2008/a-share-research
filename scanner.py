@@ -569,6 +569,12 @@ def run_scan(progress_callback=None, cancel_check=None):
                                         for k, v in strategy_results.items()))
     except Exception as e:
         strategy_results = {}
+        import traceback
+        try:
+            with open(os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), "_strategy_error.txt"), "w") as f:
+                f.write(f"策略分池错误: {e}\n\n")
+                traceback.print_exc(file=f)
+        except: pass
         log(f"  策略分池跳过: {e}")
 
     # ── 持仓体检 ──
