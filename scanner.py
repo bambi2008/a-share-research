@@ -19,6 +19,8 @@ import macro_context       # noqa: F401
 import dividend_screen     # noqa: F401
 import tech_analysis       # noqa: F401
 import concept_stocks      # noqa: F401
+import strategy_scan       # noqa: F401
+import scan_delta          # noqa: F401
 
 # ── 行业列表(从 industries.json 加载，不存在则用默认) ──
 def _load_industries():
