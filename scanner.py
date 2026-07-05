@@ -317,13 +317,9 @@ def run_scan(progress_callback=None, cancel_check=None):
     dividend_data = {}
 
     def _fetch_insider():
-        try:
-            import insider_check
-            return insider_check.fetch_insider_changes(
-                progress_callback=lambda m: log(f"  {m}"))
-        except Exception as e:
-            log(f"  高管增减持跳过: {e}")
-            return {}
+        # 沪深交易所接口超时频繁，直接跳过
+        log("  高管增减持: 已禁用(接口不稳定)")
+        return {}
 
     def _fetch_macro():
         try:
@@ -556,26 +552,13 @@ def run_scan(progress_callback=None, cancel_check=None):
     except Exception:
         delta = None
 
-    # ── 5.0 四策略分池 ──
-    try:
-        import strategy_scan
-        strategy_results = strategy_scan.apply_strategy_filters(
-            candidates, dividend_data=dividend_data, insider_alerts=insider_alerts)
-        strategy_report = strategy_scan.build_strategy_report(strategy_results, macro_data)
-        strategy_rules = strategy_scan.strategy_buy_sell_rules()
-        # 追加到主报告
-        report += "\n\n" + strategy_report + strategy_rules
-        log("  策略分池: " + ", ".join(f"{strategy_scan.STRATEGIES[k]['name']}x{len(v)}"
-                                        for k, v in strategy_results.items()))
-    except Exception as e:
-        strategy_results = {}
-        import traceback
-        try:
-            with open(os.path.join(os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__)), "_strategy_error.txt"), "w") as f:
-                f.write(f"策略分池错误: {e}\n\n")
-                traceback.print_exc(file=f)
-        except: pass
-        log(f"  策略分池跳过: {e}")
+    # ── 5.0 四策略分池(已移至GUI层) ──
+    # try:
+    #     import strategy_scan
+    #     ...
+    # except Exception as e:
+    #     strategy_results = {}
+    strategy_results = {}
 
     # ── 持仓体检 ──
     import position
@@ -585,12 +568,12 @@ def run_scan(progress_callback=None, cancel_check=None):
     log("5/5 生成报告...")
     report = _build_report(index_data, industry_stats, candidates, cand_industry,
                            top_industry, concentration, ttm_available, q_latest, positions)
-    # ── 扩展: 动量排名 + 卫星凸性 + 三仓风控面板(失败不影响主报告) ──
-    try:
-        import enrich_report
-        report += "\n\n" + enrich_report.build_extension(candidates, price_map)
-    except Exception as _e:
-        log(f" ⚠️ 扩展模块跳过: {_e}")
+    # ── 扩展: 动量排名(已移至GUI层, 避免拖慢扫描) ──
+    # try:
+    #     import enrich_report
+    #     report += "\n\n" + enrich_report.build_extension(candidates, price_map)
+    # except Exception as _e:
+    #     log(f" ⚠️ 扩展模块跳过: {_e}")
     
     # 保存
     now = datetime.now()
