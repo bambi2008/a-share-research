@@ -49,6 +49,7 @@ class Terminal:
         self.last_scan = None
         self.growth_var = tk.BooleanVar(value=False)
         self.boom_var = tk.BooleanVar(value=False)
+        self.main_board_var = tk.BooleanVar(value=False)
 
         self._build()
         self._poll()
@@ -100,6 +101,10 @@ class Terminal:
                        activebackground=CARD, activeforeground=TEXT,
                        cursor="hand2").pack(side=tk.LEFT)
         tk.Checkbutton(opts, text="卫星", variable=self.boom_var).pack(side=tk.LEFT, padx=4)
+        tk.Checkbutton(opts, text="主板", variable=self.main_board_var,
+                       font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
+                       activebackground=CARD, activeforeground=TEXT,
+                       cursor="hand2").pack(side=tk.LEFT, padx=4)
         tk.Label(opts, text="?", font=("微软雅黑", 9, "bold"), fg=TEXT2, bg=CARD,
                  cursor="hand2").pack(side=tk.RIGHT)
 
@@ -354,13 +359,19 @@ class Terminal:
                             c["div_count"] = dd.get("div_count", 0)
 
                 # === 内联四策略筛选 ===
+                main_only = self.main_board_var.get()
                 sr = {"value": [], "dividend": [], "insider": [], "turnaround": []}
 
                 for c in cands:
+                    code = c.get("code", "")
                     pe = c.get("pe")
                     roe = c.get("roe")
                     mv = c.get("mktcap")
                     if pe is None or roe is None: continue
+
+                    # 主板过滤（仅600/000开头）
+                    if main_only and not (code.startswith("60") or code.startswith("00")):
+                        continue
 
                     # V 价值: PE 3-40, ROE>5, MC>50亿
                     if 3 <= pe <= 40 and roe >= 5 and (mv is None or mv >= 50):
