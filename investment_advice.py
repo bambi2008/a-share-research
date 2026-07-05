@@ -26,11 +26,10 @@ def _bucket_of(candidate, growth_mode, boom_mode):
 
 
 def compute_rule_based_plan(candidates, growth_mode=False, boom_mode=False,
-                            equity=None, buckets_cfg=None, top_n=8):
+                            equity=None, buckets_cfg=None, top_n=8, force_bucket=None):
     """用硬规则算出每只候选的: 仓位上限% / 止损价 / 止损距离。
-
-    返回 [{code,name,bucket,price,per_name_cap_pct,max_buy_amount,
-           stop_price,stop_pct,note}, ...]
+    
+    force_bucket: 强制仓位归属 (用于策略池覆盖 boom_mode)
     """
     try:
         import portfolio_config
@@ -45,7 +44,7 @@ def compute_rule_based_plan(candidates, growth_mode=False, boom_mode=False,
 
     plans = []
     for c in candidates[:top_n]:
-        bucket = _bucket_of(c, growth_mode, boom_mode)
+        bucket = force_bucket or _bucket_of(c, growth_mode, boom_mode)
         cfg = buckets_cfg.get(bucket, {})
         price = c.get("price")
         cap_pct = cfg.get("per_name_max", 0.05)
@@ -184,13 +183,9 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
         if not pool:
             continue
         log(f"  {label}: {len(pool)}只...")
-
-        # 为每个策略池计算硬规则计划
-        pool_plans = compute_rule_based_plan(pool, growth_mode, boom_mode, equity=equity)
-        plan_table = _fmt_plan_table(pool_plans)
-
+        # 直接复用已经算好的计划表（不重复调用 compute_rule_based_plan）
         try:
-            prompt = build_qualitative_prompt(pool, pool_plans, growth_mode, summary, data_period)
+            prompt = build_qualitative_prompt(pool, [], growth_mode, summary, data_period)
             # 注入策略特定规则
             rules_text = ss.strategy_buy_sell_rules()
             # 提取对应策略的规则段
@@ -205,9 +200,9 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
                     prompt += mt
             analysis = llm_chat_fn([{"role": "user", "content": prompt}],
                                    temperature=0.4, max_tokens=800)
-            all_analyses.append(f"## {label}\n{plan_table}\n\n{analysis}\n")
+            all_analyses.append(f"## {label}\n{analysis}\n")
         except Exception as e:
-            all_analyses.append(f"## {label}\n{plan_table}\n\n(AI分析失败: {e})\n")
+            all_analyses.append(f"## {label}\n(AI分析失败: {e})\n")
 
     # 组装报告
     report = []
@@ -217,6 +212,9 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
     report.append("=" * 64)
     report.append("")
 
+    # 策略→仓位映射: V/D=压舱仓, I=动量, T=卫星
+    strategy_bucket = {"value": "anchor", "dividend": "anchor", "insider": "momentum", "turnaround": "satellite"}
+
     # 先输出所有策略的计划表（不依赖LLM）
     has_any = False
     for key, label in strategy_order:
@@ -224,7 +222,8 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
         if not pool:
             continue
         has_any = True
-        pool_plans = compute_rule_based_plan(pool, growth_mode, boom_mode, equity=equity)
+        pool_plans = compute_rule_based_plan(pool, growth_mode, boom_mode, equity=equity,
+                                              force_bucket=strategy_bucket.get(key))
         plan_table = _fmt_plan_table(pool_plans)
         report.append(f"## {label} ({len(pool)}只)")
         report.append(plan_table)
