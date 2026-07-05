@@ -208,15 +208,34 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
     report.append("=" * 64)
     report.append("  投资建议 — 四策略买卖计划")
     report.append(f"  生成: {datetime.now().strftime('%Y-%m-%d %H:%M')} | 财报截止: {data_period}")
-    report.append(f"  模式: {'爆发/卫星' if boom_mode else ('成长股' if growth_mode else '价值股')}")
     report.append("=" * 64)
     report.append("")
+
+    # 先输出所有策略的计划表（不依赖LLM）
+    has_any = False
+    for key, label in strategy_order:
+        pool = strategy_results.get(key, [])
+        if not pool:
+            continue
+        has_any = True
+        pool_plans = compute_rule_based_plan(pool, growth_mode, boom_mode, equity=equity)
+        plan_table = _fmt_plan_table(pool_plans)
+        report.append(f"## {label} ({len(pool)}只)")
+        report.append(plan_table)
+        report.append("")
+
+    if not has_any:
+        report.append("(暂无策略分池数据，请先完成扫描)")
+
     report.append(ss.strategy_buy_sell_rules())
     report.append("")
     report.append("-" * 64)
-    report.append("\n".join(all_analyses))
-    report.append("")
-    report.append("-" * 64)
+
+    # 追加LLM分析（如有）
+    if all_analyses:
+        report.append("\n".join(all_analyses))
+        report.append("")
+        report.append("-" * 64)
     report.append("说明: 仓位/止损为系统按三仓规则计算的纪律约束；")
     report.append("AI定性分析仅供研究参考，不构成投资建议。")
     return "\n".join(report)
