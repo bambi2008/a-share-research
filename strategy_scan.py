@@ -59,16 +59,16 @@ STRATEGIES = {
     "turnaround": {
         "name": "困境反转",
         "icon": "T",
-        "desc": "烂到不能再烂，开始好转",
+        "desc": "ROE偏低但利润在改善",
         "filter": {
             "pe_min": 3, "pe_max": 15,
-            "roe_min": -5, "roe_max": 8,
+            "roe_min": 5, "roe_max": 12,
             "mktcap_min": 20, "mktcap_max": 3000,
             "div_required": False,
             "insider_required": False,
             "turnaround": True,
         },
-        "sort_by": "roe_improving",
+        "sort_by": "profit_growth",
         "max_count": 10,
     },
 }
