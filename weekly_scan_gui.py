@@ -328,6 +328,43 @@ class Terminal:
             r = scanner.run_scan(
                 progress_callback=lambda m: self.q.put(("prog", m)),
                 cancel_check=lambda: self.cancel_flag)
+            # 扫描完成后，在GUI层补做策略分池（绕过PyInstaller编译问题）
+            self.q.put(("prog", "策略分池..."))
+            try:
+                import strategy_scan, json, os
+                cands = r.get("candidates_full", [])
+                # 加载缓存的扩展数据
+                exe_dir = os.path.dirname(sys.executable) if getattr(sys,'frozen',False) else "."
+                dividend_data = {}
+                insider_alerts = r.get("insider_alerts", {})
+                try:
+                    cache = json.load(open(os.path.join(exe_dir, ".dividend_cache.json"), "r"))
+                    dividend_data = cache
+                    # 注入分红数据到候选
+                    import dividend_screen
+                    for c in cands:
+                        di = dividend_screen.get_dividend_info(c.get("code",""), dividend_data, c.get("price"))
+                        if di:
+                            c["div_yield"] = di.get("div_yield")
+                            c["div_count"] = di.get("div_count")
+                except: pass
+                sr = strategy_scan.apply_strategy_filters(cands, dividend_data, insider_alerts)
+                r["strategy_results"] = sr
+                parts = []
+                for k in ("value","dividend","insider","turnaround"):
+                    n = len(sr.get(k, []))
+                    if n:
+                        parts.append(f"{k}x{n}")
+                self.q.put(("prog", f"策略分池: {' '.join(parts)}"))
+            except Exception as e:
+                import traceback
+                self.q.put(("prog", f"策略分池失败: {e}"))
+                # 写桌面错误文件
+                try:
+                    with open(os.path.join(os.path.dirname(sys.executable) if getattr(sys,'frozen',False) else ".", "_strategy_error2.txt"), "w") as f:
+                        f.write(f"GUI策略分池错误: {e}\n\n")
+                        traceback.print_exc(file=f)
+                except: pass
             self.q.put(("scan_done", r))
         except scanner.ScanCancelled: self.q.put(("cancelled", None))
         except Exception as e: self.q.put(("err", str(e)))

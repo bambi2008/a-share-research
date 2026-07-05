@@ -46,7 +46,12 @@ def get_dividend_info(code, dividend_data, price=None):
 
     div_yield = None
     if price and price > 0 and info.get("avg_div", 0) > 0:
-        div_yield = round(info["avg_div"] / price * 100, 1)
+        # avg_div 是年均每10股股息(元)，换算成每股再算收益率
+        div_per_share = info["avg_div"] / 10.0
+        div_yield = round(div_per_share / price * 100, 2)
+        # 上限保护：历史累计均值可能失真，超过15%视为异常
+        if div_yield > 15:
+            div_yield = None
 
     return {
         "avg_div": info["avg_div"],
