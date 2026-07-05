@@ -201,7 +201,7 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
                                    temperature=0.4, max_tokens=800)
             all_analyses.append(f"## {label}\n{plan_table}\n\n{analysis}\n")
         except Exception as e:
-            all_analyses.append(f"## {label}\n(分析失败: {e})\n")
+            all_analyses.append(f"## {label}\n{plan_table}\n\n(AI分析失败: {e})\n")
 
     # 组装报告
     report = []
