@@ -411,13 +411,13 @@ class Terminal:
                     return s
 
                 sr["value"].sort(key=_score, reverse=True)
+                sr["value"] = sr["value"][:20]
                 # 标注推荐度
                 for i, c in enumerate(sr["value"]):
                     if i < 5:    c["rec_level"] = "⭐⭐⭐ 强烈推荐"
                     elif i < 10: c["rec_level"] = "⭐⭐   推荐"
                     elif i < 15: c["rec_level"] = "⭐    关注"
                     else:        c["rec_level"] = "谨慎"
-                sr["value"] = sr["value"][:20]
                 sr["dividend"].sort(key=lambda x: x.get("div_yield") or 0, reverse=True)
                 sr["dividend"] = sr["dividend"][:10]
                 sr["turnaround"].sort(key=lambda x: x.get("profit_growth") or 0, reverse=True)
