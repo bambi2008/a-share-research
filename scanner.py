@@ -27,7 +27,10 @@ def _load_industries():
     import json, sys
     p = os.path.join(os.path.dirname(os.path.abspath(__file__)), "industries.json")
     if getattr(sys, 'frozen', False):
+        # 优先 exe 同目录，其次 _MEIPASS（PyInstaller 打包位置）
         p = os.path.join(os.path.dirname(sys.executable), "industries.json")
+        if not os.path.exists(p):
+            p = os.path.join(sys._MEIPASS, "industries.json")
     try:
         with open(p, 'r', encoding='utf-8') as f:
             return json.load(f).get("industries", [])

@@ -26,7 +26,7 @@ def _bucket_of(candidate, growth_mode, boom_mode):
 
 
 def compute_rule_based_plan(candidates, growth_mode=False, boom_mode=False,
-                            equity=None, buckets_cfg=None, top_n=8, force_bucket=None):
+                            equity=None, buckets_cfg=None, top_n=20, force_bucket=None):
     """用硬规则算出每只候选的: 仓位上限% / 止损价 / 止损距离。
     
     force_bucket: 强制仓位归属 (用于策略池覆盖 boom_mode)
@@ -223,7 +223,7 @@ def generate_advice(scan_result, growth_mode, llm_chat_fn, boom_mode=False,
             continue
         has_any = True
         pool_plans = compute_rule_based_plan(pool, growth_mode, boom_mode, equity=equity,
-                                              force_bucket=strategy_bucket.get(key))
+                                              force_bucket=strategy_bucket.get(key), top_n=20)
         plan_table = _fmt_plan_table(pool_plans)
         report.append(f"## {label} ({len(pool)}只)")
         report.append(plan_table)

@@ -94,25 +94,19 @@ class Terminal:
         self.risk_btn.pack(fill=tk.X, pady=2)
         self._btn(btns, "我的投资", "#ec4899", self._show_portfolio).pack(fill=tk.X, pady=2)
 
-        # 成长股开关
+        # 筛选选项 - 每行一个
         opts = tk.Frame(left, bg=CARD)
-        opts.pack(fill=tk.X, padx=14, pady=(6, 4))
-        tk.Checkbutton(opts, text="成长股模式 (放宽PE/ROE)", variable=self.growth_var,
-                       font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
-                       activebackground=CARD, activeforeground=TEXT,
-                       cursor="hand2").pack(side=tk.LEFT)
-        tk.Checkbutton(opts, text="卫星", variable=self.boom_var).pack(side=tk.LEFT, padx=4)
-        # 主板过滤 — 独立一行更显眼
-        opts2 = tk.Frame(left, bg=CARD)
-        opts2.pack(fill=tk.X, padx=14, pady=(2, 4))
-        tk.Checkbutton(opts2, text="仅主板(600/000) 排除科创/创业板", variable=self.main_board_var,
-                       font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
-                       activebackground=CARD, activeforeground=TEXT,
-                       cursor="hand2").pack(side=tk.LEFT)
-        tk.Checkbutton(opts2, text="含概念股", variable=self.concept_var,
-                       font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
-                       activebackground=CARD, activeforeground=TEXT,
-                       cursor="hand2").pack(side=tk.LEFT, padx=8)
+        opts.pack(fill=tk.X, padx=14, pady=(6, 2))
+        for var, text in [
+            (self.growth_var, "成长股模式 (放宽PE/ROE)"),
+            (self.boom_var, "卫星 (爆发赛道)"),
+            (self.main_board_var, "仅限主板 (600/000)"),
+            (self.concept_var, "含概念股 (6个热门板块)"),
+        ]:
+            tk.Checkbutton(opts, text=text, variable=var,
+                           font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
+                           activebackground=CARD, activeforeground=TEXT,
+                           cursor="hand2", anchor="w").pack(fill=tk.X, pady=1)
         tk.Label(opts, text="?", font=("微软雅黑", 9, "bold"), fg=TEXT2, bg=CARD,
                  cursor="hand2").pack(side=tk.RIGHT)
 
@@ -399,8 +393,31 @@ class Terminal:
                         sr["turnaround"].append(c)
 
                 # 排序+截断
-                sr["value"].sort(key=lambda x: x.get("roe") or 0, reverse=True)
-                sr["value"] = sr["value"][:15]
+                # === V池综合评分排序 ===
+                def _score(c):
+                    roe = c.get("roe") or 0
+                    pe = c.get("pe")
+                    pg = c.get("profit_growth") or 0
+                    droe = c.get("deduct_roe")
+                    s = 0
+                    s += roe * 4                          # ROE权重最高
+                    if pe and 3 <= pe <= 40:
+                        s += (40 - pe) * 0.3              # PE越低越好
+                    if droe and roe > 0:
+                        if abs(droe - roe) / roe < 0.15:  # 扣非ROE接近ROE
+                            s += 10
+                    if pg > 0:
+                        s += min(pg, 100) * 0.1           # 利润增长加分
+                    return s
+
+                sr["value"].sort(key=_score, reverse=True)
+                # 标注推荐度
+                for i, c in enumerate(sr["value"]):
+                    if i < 5:    c["rec_level"] = "⭐⭐⭐ 强烈推荐"
+                    elif i < 10: c["rec_level"] = "⭐⭐   推荐"
+                    elif i < 15: c["rec_level"] = "⭐    关注"
+                    else:        c["rec_level"] = "谨慎"
+                sr["value"] = sr["value"][:20]
                 sr["dividend"].sort(key=lambda x: x.get("div_yield") or 0, reverse=True)
                 sr["dividend"] = sr["dividend"][:10]
                 sr["turnaround"].sort(key=lambda x: x.get("profit_growth") or 0, reverse=True)
@@ -507,21 +524,29 @@ class Terminal:
         threading.Thread(target=self._hk_worker, daemon=True).start()
 
     def _show_filtered_table(self):
-        """根据策略筛选重新显示表格"""
+        """根据策略筛选重新显示表格 — 使用预计算策略池"""
         m = self.last_scan
         if not m: return
         cands = m.get("candidates_full") or []
         sr = m.get("strategy_results", {})
         fkey = self._strategy_filter.get() if hasattr(self, '_strategy_filter') else "all"
+
+        # 使用预计算策略池（已排序+标注推荐度）
         if fkey != "all" and sr.get(fkey):
-            display_cands = [c for c in cands if c.get("strategy") == fkey]
+            display_cands = sr[fkey]
+        elif sr.get("value"):
+            # 默认显示 V价值池 top20（按推荐度排序）
+            display_cands = sr["value"]
         else:
             display_cands = cands[:40]
-        cols = ("代码","名称","PE","ROE%","变动","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+
+        cols = ("代码","名称","PE","ROE%","推荐度","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+
         rows = []
         for c in display_cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
             roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
+            rec = c.get('rec_level', '')
             droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
             price = f"{c.get('price',0):.2f}" if c.get('price') else "-"
             mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
@@ -535,22 +560,25 @@ class Terminal:
             rsi = c.get('rsi14')
             if rsi is not None:
                 trend_str += f" {rsi:.0f}"
-            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, rec, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
         self._show_table(cols, rows, height=22)
 
     def _view_scan(self):
-        """重新显示扫描结果（不重新扫描）"""
+        """重新显示扫描结果 — 默认按推荐度排序显示价值池"""
         if self.busy: return
         m = self.last_scan
         if not m: return
-        cands = m.get("candidates_full") or []
+        sr = m.get("strategy_results", {})
+        # 优先用价值池（已按推荐度排序），fallback 到全部候选
+        cands = sr.get("value") if sr.get("value") else m.get("candidates_full") or []
         if not cands: return
         self.view_scan_btn.config(state=tk.DISABLED)
-        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","变化","营收增%","利润增%")
+        cols = ("代码","名称","PE","ROE%","推荐度","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","变化","营收增%","利润增%")
         rows = []
         for c in cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
             roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
+            rec = c.get('rec_level', '')
             droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
             price = f"{c.get('price',0):.2f}" if c.get('price') else "-"
             mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
@@ -565,7 +593,7 @@ class Terminal:
             if rsi is not None:
                 trend_str += f" {rsi:.0f}"
             delta_tag = c.get('delta_tag', '')
-            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, delta_tag, rev, prof))
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, rec, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, delta_tag, rev, prof))
         self._show_table(cols, rows, height=22)
 
     def _hk_worker(self):
@@ -801,19 +829,22 @@ class Terminal:
                                     activebackground=CARD, activeforeground=color,
                                     cursor="hand2", indicatoron=False, padx=8, pady=2,
                                     command=lambda: self._show_filtered_table()).pack(side=tk.LEFT)
-                    # 表格
+                    # 表格 — 默认显示 V价值池 top20（按推荐度排序）
                     if cands:
-                        # 应用策略筛选
                         fkey = self._strategy_filter.get() if hasattr(self, '_strategy_filter') else "all"
                         if fkey != "all" and sr.get(fkey):
-                            display_cands = [c for c in cands if c.get("strategy") == fkey]
+                            display_cands = sr[fkey]
+                        elif sr.get("value"):
+                            # 默认: 价值池 top20
+                            display_cands = sr["value"]
                         else:
                             display_cands = cands[:40]
-                        cols = ("代码","名称","PE","ROE%","变动","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+                        cols = ("代码","名称","PE","ROE%","推荐度","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
                         rows = []
                         for c in display_cands[:40]:
                             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
                             roe = f"{c.get('roe',0):.1f}" if c.get('roe') is not None else "-"
+                            rec = c.get('rec_level', '')
                             droe = f"{c.get('deduct_roe',0):.1f}" if c.get('deduct_roe') is not None else "-"
                             price = f"{c.get('price',0):.2f}" if c.get('price') else "-"
                             mv = f"{c.get('mktcap',0):.0f}" if c.get('mktcap') else "-"
@@ -827,7 +858,7 @@ class Terminal:
                             rsi = c.get('rsi14')
                             if rsi is not None:
                                 trend_str += f" {rsi:.0f}"
-                            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
+                            rows.append((c.get('code',''), c.get('name',''), pe, roe, rec, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
                         self._show_table(cols, rows, height=22)
                 elif k == "research_done":
                     self.busy = False; self.prog.stop(); self._status("深度分析完成", PURPLE)
