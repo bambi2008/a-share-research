@@ -370,26 +370,27 @@ class Terminal:
                     pe = c.get("pe")
                     roe = c.get("roe")
                     mv = c.get("mktcap")
-                    if pe is None or roe is None: continue
+                    if roe is None: continue
+                    # PE=None 也保留（新股/数据缺失，已在scanner层过滤）
 
                     # 主板过滤（仅600/000开头）
                     if main_only and not (code.startswith("60") or code.startswith("00")):
                         continue
 
-                    # V 价值: PE 3-40, ROE>5, MC>50亿
-                    if 3 <= pe <= 40 and roe >= 5 and (mv is None or mv >= 50):
+                    # V 价值: ROE>5, 放宽PE/市值门槛(scanner已做基础过滤)
+                    if roe >= 5 and (mv is None or mv >= 20) and (pe is None or pe >= 1):
                         sr["value"].append(c)
 
-                    # D 红利: PE<30, ROE>5, 股息率>1.5%或分红>=3次
-                    if pe <= 30 and roe >= 5:
+                    # D 红利: ROE>5, 股息率>1.5%或分红>=3次
+                    if roe >= 5 and (pe is None or pe <= 40):
                         dy = c.get("div_yield")
                         dc = c.get("div_count") or 0
                         if (dy is not None and dy >= 1.5) or dc >= 3:
                             sr["dividend"].append(c)
 
-                    # T 反转: PE<15, ROE 5-15%, 利润增速>0
+                    # T 反转: PE<20(放宽), ROE 5-15%, 利润增速>0
                     pg = c.get("profit_growth")
-                    if pe <= 15 and 5 <= roe <= 15 and pg is not None and pg > 0:
+                    if (pe is None or pe <= 20) and 5 <= roe <= 15 and pg is not None and pg > 0:
                         sr["turnaround"].append(c)
 
                 # 排序+截断
