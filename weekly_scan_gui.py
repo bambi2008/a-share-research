@@ -406,6 +406,36 @@ class Terminal:
                     n = len(sr.get(k, []))
                     if n: parts.append(f"{k}x{n}")
                 self.q.put(("prog", f"策略: {' '.join(parts) if parts else '全部为空'}"))
+
+                # 变化追踪: 对比上次扫描
+                try:
+                    import scan_delta
+                    delta = scan_delta.compute_delta(cands)
+                    r["delta"] = delta
+                    # 给每个候选打变化标签
+                    if delta:
+                        new_set = delta.get("new_codes", set())
+                        exits_set = delta.get("exited_codes", set())
+                        last_ranks = delta.get("last_ranks", {}) if hasattr(delta, 'get') else {}
+                        for i, c in enumerate(cands):
+                            code = c.get("code", "")
+                            if code in new_set:
+                                c["delta_tag"] = "新进"
+                            elif code in exits_set:
+                                c["delta_tag"] = "退出"
+                            elif last_ranks and code in last_ranks:
+                                old_r = last_ranks[code]
+                                diff = old_r - (i + 1)
+                                if abs(diff) >= 5:
+                                    c["delta_tag"] = f"↑{abs(diff)}" if diff > 0 else f"↓{abs(diff)}"
+                                else:
+                                    c["delta_tag"] = "—"
+                            else:
+                                c["delta_tag"] = "—"
+                        scan_delta.save_scan(cands, r.get("scan_time", ""))
+                        self.q.put(("prog", f"变化: {delta.get('delta_summary','')}"))
+                except Exception:
+                    pass
             except Exception as e:
                 import traceback
                 self.q.put(("prog", f"策略分池失败: {e}"))
@@ -481,7 +511,7 @@ class Terminal:
             display_cands = [c for c in cands if c.get("strategy") == fkey]
         else:
             display_cands = cands[:40]
-        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+        cols = ("代码","名称","PE","ROE%","变动","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
         rows = []
         for c in display_cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -510,7 +540,7 @@ class Terminal:
         cands = m.get("candidates_full") or []
         if not cands: return
         self.view_scan_btn.config(state=tk.DISABLED)
-        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","变化","营收增%","利润增%")
         rows = []
         for c in cands[:40]:
             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
@@ -528,7 +558,8 @@ class Terminal:
             rsi = c.get('rsi14')
             if rsi is not None:
                 trend_str += f" {rsi:.0f}"
-            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, rev, prof))
+            delta_tag = c.get('delta_tag', '')
+            rows.append((c.get('code',''), c.get('name',''), pe, roe, droe, price, mv, c.get('industry',''), concepts_str, div_str, insider_str, trend_str, delta_tag, rev, prof))
         self._show_table(cols, rows, height=22)
 
     def _hk_worker(self):
@@ -772,7 +803,7 @@ class Terminal:
                             display_cands = [c for c in cands if c.get("strategy") == fkey]
                         else:
                             display_cands = cands[:40]
-                        cols = ("代码","名称","PE","ROE%","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
+                        cols = ("代码","名称","PE","ROE%","变动","扣非ROE%","价格","市值(亿)","行业","概念","分红%","高管","趋势","营收增%","利润增%")
                         rows = []
                         for c in display_cands[:40]:
                             pe = f"{c.get('pe',0):.1f}" if c.get('pe') else "-"
