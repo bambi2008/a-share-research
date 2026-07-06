@@ -214,7 +214,7 @@ def _report_quarter_dates(now=None):
     return latest, prev_annual, prev_year_same_q
 
 
-def run_scan(progress_callback=None, cancel_check=None):
+def run_scan(progress_callback=None, cancel_check=None, include_concepts=False):
     """执行扫描。
     progress_callback(msg): 进度回调
     cancel_check(): 返回 True 表示用户请求取消
@@ -296,18 +296,19 @@ def run_scan(progress_callback=None, cancel_check=None):
     check_cancel()
 
     # ── 2.5 热门概念板块 ──
-    log("2.5 热门概念...")
-    check_cancel()
     concept_codes_all = set()
     code_concepts = {}
-    try:
-        import concept_stocks
-        concept_stocks_all, code_concepts = concept_stocks.get_concept_codes(
-            progress_callback=lambda m: log(f"  {m}"))
-        concept_codes_all = concept_stocks_all
-        log(f"  概念股: {len(concept_codes_all)} 只 (6个概念板块)")
-    except Exception as e:
-        log(f"  概念板块跳过: {e}")
+    if include_concepts:
+        log("2.5 热门概念...")
+        check_cancel()
+        try:
+            import concept_stocks
+            concept_stocks_all, code_concepts = concept_stocks.get_concept_codes(
+                progress_callback=lambda m: log(f"  {m}"))
+            concept_codes_all = concept_stocks_all
+            log(f"  概念股: {len(concept_codes_all)} 只 (6个概念板块)")
+        except Exception as e:
+            log(f"  概念板块跳过: {e}")
 
     # ── 2.6 扩展数据（并行）：高管增减持 + 宏观 + 分红 ──
     log("2.6 扩展数据...")

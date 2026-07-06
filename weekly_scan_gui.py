@@ -50,6 +50,7 @@ class Terminal:
         self.growth_var = tk.BooleanVar(value=False)
         self.boom_var = tk.BooleanVar(value=False)
         self.main_board_var = tk.BooleanVar(value=False)
+        self.concept_var = tk.BooleanVar(value=False)  # 概念股默认关闭
 
         self._build()
         self._poll()
@@ -108,6 +109,10 @@ class Terminal:
                        font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
                        activebackground=CARD, activeforeground=TEXT,
                        cursor="hand2").pack(side=tk.LEFT)
+        tk.Checkbutton(opts2, text="含概念股", variable=self.concept_var,
+                       font=("微软雅黑", 9), fg=TEXT2, bg=CARD, selectcolor=CARD,
+                       activebackground=CARD, activeforeground=TEXT,
+                       cursor="hand2").pack(side=tk.LEFT, padx=8)
         tk.Label(opts, text="?", font=("微软雅黑", 9, "bold"), fg=TEXT2, bg=CARD,
                  cursor="hand2").pack(side=tk.RIGHT)
 
@@ -335,7 +340,8 @@ class Terminal:
         try:
             r = scanner.run_scan(
                 progress_callback=lambda m: self.q.put(("prog", m)),
-                cancel_check=lambda: self.cancel_flag)
+                cancel_check=lambda: self.cancel_flag,
+                include_concepts=self.concept_var.get())
             # 扫描完成后，在GUI层补做策略分池
             self.q.put(("prog", "策略分池..."))
             try:
